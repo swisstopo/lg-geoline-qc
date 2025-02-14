@@ -13,8 +13,16 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QComboBox,
 )
-from qgis.core import QgsGeometry, QgsPointXY, QgsProject, QgsFeature, QgsVectorLayer, QgsField
+from qgis.core import (
+    QgsGeometry,
+    QgsPointXY,
+    QgsProject,
+    QgsFeature,
+    QgsVectorLayer,
+    QgsField,
+)
 from qgis.PyQt.QtCore import QVariant
+from qgis.core import QgsSpatialIndex
 
 
 from qgis.core import (
@@ -39,16 +47,16 @@ class GeolinesQCPlugin:
         self.iface = iface
         self.plugin_dir = os.path.dirname(__file__)
         self.actions = []
-        self.menu = self.tr("&Distance Checker")
+        self.menu = self.tr("&GeoLines QC")
 
     def tr(self, message):
-        return QCoreApplication.translate("DistanceChecker", message)
+        return QCoreApplication.translate("GeoLinesQC", message)
 
     def initGui(self):
         # Create action for the plugin
         self.action = QAction(
             QIcon(":/plugins/GeoLinesQC/icons8-line-chart-50.png"),
-            "Distance Checker",
+            "GeoLines QC",
             self.iface.mainWindow(),
         )
         self.action.triggered.connect(self.run)
@@ -57,13 +65,13 @@ class GeolinesQCPlugin:
 
     def unload(self):
         # Remove plugin menu and icon
-        self.iface.removePluginMenu("&Distance Checker", self.action)
+        self.iface.removePluginMenu("&GeoLines QC", self.action)
         self.iface.removeToolBarIcon(self.action)
 
     def run(self):
         # Create and show the dialog
         self.dialog = QDialog()
-        self.dialog.setWindowTitle("Distance Checker")
+        self.dialog.setWindowTitle("GeoLines QC")
         layout = QVBoxLayout()
 
         # Add input fields for layers and threshold distance
@@ -108,7 +116,6 @@ class GeolinesQCPlugin:
         input_layer = QgsProject.instance().mapLayersByName(layer1_name)[0]
         reference_layer = QgsProject.instance().mapLayersByName(layer2_name)[0]
 
-
         # Create a new memory layer to store the segmented lines with intersection results
         output_layer = QgsVectorLayer(
             "LineString?crs=" + input_layer.crs().authid(),
@@ -147,9 +154,13 @@ class GeolinesQCPlugin:
 
         # Add the output layer to the map
         QgsProject.instance().addMapLayer(output_layer)
-        print("Segmentation and intersection check complete. Output layer added to the map.")
+        print(
+            "Segmentation and intersection check complete. Output layer added to the map."
+        )
         self.iface.messageBar().pushMessage(
-            "Info", "Segmentation and intersection check complete. Output layer added to the map.", level=Qgis.Info
+            "Info",
+            "Segmentation and intersection check complete. Output layer added to the map.",
+            level=Qgis.Info,
         )
 
     def segment_line(self, line, segment_length):
@@ -198,7 +209,9 @@ class GeolinesQCPlugin:
                     accumulated_length = 0.0
 
                     # Update the segment with the remaining part after the cut
-                    segment = QgsGeometry.fromPolyline([QgsPoint(cut_point), current_point])
+                    segment = QgsGeometry.fromPolyline(
+                        [QgsPoint(cut_point), current_point]
+                    )
                     segment_length_current = segment.length()
 
                 # Add the current point to the segment
@@ -231,14 +244,23 @@ class GeolinesQCPlugin:
         self.iface.messageBar().pushMessage(
             "Info", "Starting analysis...", level=Qgis.Info
         )
+        # Create a spatial index for layer2
+        index = QgsSpatialIndex(reference_layer.getFeatures())
         try:
             # Create a buffer around the segment
             segment_buffer = segment.buffer(
                 buffer_distance, 5
             )  # 5 is the number of segments to approximate the buffer
 
-            # Check for intersections with the reference layer
-            for feature in reference_layer.getFeatures():
+            # Create a spatial index for the reference layer
+            spatial_index = QgsSpatialIndex(reference_layer.getFeatures())
+
+            # Find features in the reference layer that intersect with the buffer's bounding box
+            candidate_ids = spatial_index.intersects(segment_buffer.boundingBox())
+
+            # Check for actual intersections with the candidate features
+            for feature_id in candidate_ids:
+                feature = reference_layer.getFeature(feature_id)
                 reference_geometry = feature.geometry()
                 if segment_buffer.intersects(reference_geometry):
                     return True  # Intersection found
