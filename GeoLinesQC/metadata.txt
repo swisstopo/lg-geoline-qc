@@ -1,5 +1,5 @@
 [general]
-name=Distance Checker
+name=GeoLines QC
 description=Checks if features in one layer are within a specified distance of features in a reference layer.
 version=0.0.0
 qgisMinimumVersion=3.0
