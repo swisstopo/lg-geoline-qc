@@ -9,9 +9,9 @@ jobs:
         run: pip install -r requirements/lint_format.txt
       - uses: chartboost/ruff-action@v1
         with:
-          src: firstaid
+          src: GeoLinesQC
           args: format --check
       - uses: chartboost/ruff-action@v1
         with:
-          src: firstaid
+          src: GeoLinesQC
           args: check
