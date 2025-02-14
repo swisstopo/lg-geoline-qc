@@ -1,0 +1,4 @@
+[tool.qgis-plugin-ci]
+plugin_path = "GeoLinesQC"
+github_organization_slug = "swisstopo"
+project_slug = "qgis-geolines-qc-plugin"

@@ -1,0 +1,18 @@
+[general]
+name=Distance Checker
+description=Checks if features in one layer are within a specified distance of features in a reference layer.
+version=0.0.0
+qgisMinimumVersion=3.0
+qgisMaximumVersion=3.99
+author=Marc Monnerat
+email=marc.monnerat@swisstopo.ch
+icon=icons8-line-chart-50.png
+
+homepage=https://github.com/wonder-sk/qgis-first-aid-plugin
+tracker=https://github.com/wonder-sk/qgis-first-aid-plugin/issues
+repository=https://github.com/wonder-sk/qgis-first-aid-plugin
+about=Provides Python debugger and replaces the default Python error handling in QGIS
+  with a more sophisticated handler that allows more thorough inspection
+  of the Python error: browse the frames, view variables, see source code
+  or even execute Python code within the context of the error.
+tags=geocover, geology, tectonic, 3d
