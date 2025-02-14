@@ -20,6 +20,6 @@ def classFactory(iface):
     :type iface: QgsInterface
     """
     #
-    from .distance_checker_plugin import DistanceCheckerPlugin
+    from .geolines_qc_plugin import GeolinesQCPlugin
 
-    return DistanceCheckerPlugin(iface)
+    return GeolinesQCPlugin(iface)

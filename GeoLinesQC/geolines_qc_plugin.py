@@ -34,7 +34,7 @@ from qgis.gui import QgsMessageBar
 from qgis.utils import iface
 
 
-class DistanceCheckerPlugin:
+class GeolinesQCPlugin:
     def __init__(self, iface):
         self.iface = iface
         self.plugin_dir = os.path.dirname(__file__)
