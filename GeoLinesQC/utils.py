@@ -1,5 +1,4 @@
 from qgis.core import QgsProject
-from qgis.utils import iface
 
 
 def get_layer_toc_name(layer):

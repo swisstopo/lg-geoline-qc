@@ -1,51 +1,30 @@
 # -*- coding: utf-8 -*-
 
-import sys
-import os
-from qgis.core import Qgis
 
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtCore import Qt
+import os
+
+from qgis.core import (
+    Qgis,
+    QgsFeature,
+    QgsField,
+    QgsGeometry,
+    QgsPoint,
+    QgsProject,
+    QgsSpatialIndex,
+    QgsVectorLayer,
+)
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
+    QComboBox,
     QDialog,
-    QVBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressDialog,
     QPushButton,
-    QComboBox,
+    QVBoxLayout,
 )
-from qgis.core import (
-    QgsGeometry,
-    QgsPointXY,
-    QgsProject,
-    QgsFeature,
-    QgsVectorLayer,
-    QgsField,
-)
-from qgis.PyQt.QtCore import QVariant
-from qgis.core import QgsSpatialIndex
-from qgis.PyQt.QtWidgets import QProgressDialog
-
-
-from qgis.core import (
-    QgsGeometry,
-    QgsPointXY,
-    QgsPoint,
-    QgsProject,
-    QgsFeature,
-    QgsVectorLayer,
-)
-from qgis.PyQt.QtCore import QVariant
-
-from qgis.core import QgsGeometry, QgsPoint, QgsProject, QgsFeature, QgsVectorLayer
-from qgis.core import QgsSpatialIndex
-from qgis.core import QgsProject, QgsFeature, QgsGeometry, QgsDistanceArea
-from qgis.gui import QgsMessageBar
-from qgis.utils import iface
-
-from GeoLinesQC.utils import get_layer_toc_name
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 100.0
@@ -126,10 +105,10 @@ class GeolinesQCPlugin:
         buffer_distance = (
             float(self.threshold_input.text())
             if self.threshold_input.text()
-            else DEFAULT_THRESHOLD
+            else DEFAULT_BUFFER
         )
 
-        segment_length = segment_length
+
 
         self.iface.messageBar().pushMessage(
             "Info",
@@ -299,8 +278,7 @@ class GeolinesQCPlugin:
         self.iface.messageBar().pushMessage(
             "Info", "Starting analysis...", level=Qgis.Info
         )
-        # Create a spatial index for layer2
-        index = QgsSpatialIndex(reference_layer.getFeatures())
+        
         try:
             # Create a buffer around the segment
             segment_buffer = segment.buffer(
@@ -327,28 +305,4 @@ class GeolinesQCPlugin:
             self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
             return False
 
-    # TODO: not used
-    def check_distance(self, layer1, layer2, threshold=None):
-        # Initialize distance calculator
-        self.iface.messageBar().pushMessage(
-            "Info", "Starting analysis...", level=Qgis.Info
-        )
-        try:
-            d = QgsDistanceArea()
-            d.setSourceCrs(layer1.crs(), QgsProject.instance().transformContext())
 
-            """# Iterate through features in both layers
-          for feat1 in layer1.getFeatures():
-            geom1 = feat1.geometry()
-            for feat2 in layer2.getFeatures():
-                geom2 = feat2.geometry()
-                distance = d.measureLine(geom1.centroid().asPoint(), geom2.centroid().asPoint())
-
-                # Check if distance is within threshold
-                if threshold and distance <= threshold:
-                    print(f"Feature {feat1.id()} is within {threshold} units of Feature {feat2.id()}")"""
-            self.iface.messageBar().pushMessage(
-                "Analysis Complete", "Distance check finished", level=Qgis.Info
-            )
-        except Exception as e:
-            self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
