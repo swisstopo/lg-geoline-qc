@@ -3,6 +3,7 @@
 
 import os
 
+from qgis import processing
 from qgis.core import (
     Qgis,
     QgsFeature,
@@ -26,6 +27,9 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from GeoLinesQC import resolve
+from GeoLinesQC.utils import geometry_to_vector_layer
+
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 100.0
 
@@ -36,6 +40,7 @@ class GeolinesQCPlugin:
         self.plugin_dir = os.path.dirname(__file__)
         self.actions = []
         self.menu = self.tr("&GeoLines QC")
+        self.predefined_geometries = {}
 
     def tr(self, message):
         return QCoreApplication.translate("GeoLinesQC", message)
@@ -56,6 +61,64 @@ class GeolinesQCPlugin:
         self.iface.removePluginMenu("&GeoLines QC", self.action)
         self.iface.removeToolBarIcon(self.action)
 
+    def get_predefined_geometries(self):
+        # Load the GPGK file
+        gpkg_path = resolve("data/regions.gpkg")
+        layername = "regions"
+
+        if bool(self.predefined_geometries):
+            return self.predefined_geometries
+
+        try:
+            # Check if the file exists
+            if not os.path.exists(gpkg_path):
+                raise FileNotFoundError(f"The file '{gpkg_path}' does not exist.")
+
+            regions_layer = QgsVectorLayer(
+                gpkg_path + "|layername=" + layername, "regions", "ogr"
+            )
+
+            # Check if the layer is valid
+            if not regions_layer.isValid():
+                raise ValueError(
+                    f"Failed to load layer from '{gpkg_path}'. The file may be corrupt or unsupported."
+                )
+
+            # Check if the layer contains geometries
+            if regions_layer.featureCount() == 0:
+                raise ValueError(f"The layer '{layername}' contains no features.")
+
+        except FileNotFoundError as e:
+            self.iface.messageBar().pushMessage(
+                "File Not Found", str(e), level=Qgis.Critical
+            )
+
+        except ValueError as e:
+            self.iface.messageBar().pushMessage(
+                "Layer Error", str(e), level=Qgis.Critical
+            )
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Unexpected Error",
+                f"An unexpected error occurred: {str(e)}",
+                level=Qgis.Critical,
+            )
+
+        # Store geometries in a dictionary
+
+        for feature in regions_layer.getFeatures():
+            name = feature["name"]
+            geometry = feature.geometry()
+            self.predefined_geometries[name] = geometry
+
+        return self.predefined_geometries
+
+    def get_selected_geometry(self):
+        selected_name = self.geometry_combo.currentText()
+        if selected_name != "None":
+            return self.get_predefined_geometries()[selected_name]
+        return None
+
     def run(self):
         # Create and show the dialog
         self.iface.messageBar().pushMessage(
@@ -74,6 +137,7 @@ class GeolinesQCPlugin:
         self.threshold_input.setPlaceholderText(
             f"Optional: buffer distance [m] (default: {DEFAULT_BUFFER})"
         )
+        self.geometry_combo = QComboBox()
 
         layout.addWidget(QLabel("Layer to Check:"))
         layout.addWidget(self.layer1_combo)
@@ -81,6 +145,13 @@ class GeolinesQCPlugin:
         layout.addWidget(self.layer2_combo)
         layout.addWidget(QLabel("Buffer Distance:"))
         layout.addWidget(self.threshold_input)
+
+        # Add a dropdown for predefined geometries
+        self.geometry_combo.addItem("None")
+        for name in self.get_predefined_geometries():
+            self.geometry_combo.addItem(name)
+        layout.addWidget(QLabel("Select Region:"))
+        layout.addWidget(self.geometry_combo)
 
         layers = QgsProject.instance().layerTreeRoot().children()
         self.layer1_combo.clear()
@@ -97,6 +168,43 @@ class GeolinesQCPlugin:
         self.dialog.setLayout(layout)
         self.dialog.exec_()
 
+    def clip_layer_with_processing(self, layer, region_layer, layer_name):
+        """
+        Clips a layer using the QGIS processing tool.
+
+        Args:
+            layer (QgsVectorLayer): The layer to clip.
+            region_layer (QgsVectorLayer): The region layer to clip with.
+            layer_name (str): Name of the clipped layer.
+
+        Returns:
+            QgsVectorLayer: The clipped layer, or None if an error occurs.
+        """
+        try:
+            # Run the clip algorithm
+            result = processing.run(
+                "qgis:clip",
+                {
+                    "INPUT": layer,
+                    "OVERLAY": region_layer,
+                    "OUTPUT": "memory:",
+                },
+            )
+
+            # Get the clipped layer
+            clipped_layer = result["OUTPUT"]
+            clipped_layer.setName(layer_name)
+
+            return clipped_layer
+
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Error",
+                f"Failed to clip layer: {str(e)}",
+                level=Qgis.Critical,
+            )
+            return None
+
     def analyze_layers(self):
         # Get selected layers
         # TODO check validiy
@@ -108,16 +216,50 @@ class GeolinesQCPlugin:
             else DEFAULT_BUFFER
         )
 
-
-
         self.iface.messageBar().pushMessage(
             "Info",
-            "Starting analysis...",
+            "Loading data...",
             level=Qgis.Info,
         )
 
-        input_layer = QgsProject.instance().mapLayersByName(layer1_name)[0]
-        reference_layer = QgsProject.instance().mapLayersByName(layer2_name)[0]
+        input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
+        reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
+
+        # Get the selected region layer
+        region_geometry = (
+            self.get_selected_geometry()
+        )  # Assuming this returns a QgsVectorLayer
+
+        self.iface.messageBar().pushMessage(
+            "Info",
+            "Clipping data...",
+            level=Qgis.Info,
+        )
+
+        if not region_geometry:
+            self.iface.messageBar().pushMessage(
+                "Info",
+                "No region selected. Using the full dataset",
+                level=Qgis.Info,
+            )
+            input_layer = input_layer_full
+            reference_layer = reference_layer_full
+        else:
+            # Convert the region geometry to a vector layer
+            region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
+            # Clip layer1 to the selected region
+            input_layer = self.clip_layer_with_processing(
+                input_layer_full, region_layer, "Clipped Layer 1"
+            )
+            if input_layer:
+                QgsProject.instance().addMapLayer(input_layer)
+
+            # Clip layer2 to the selected region
+            reference_layer = self.clip_layer_with_processing(
+                reference_layer_full, region_layer, "Clipped Layer 2"
+            )
+            if reference_layer:
+                QgsProject.instance().addMapLayer(reference_layer)
 
         # Create a new memory layer to store the segmented lines with intersection results
         output_layer = QgsVectorLayer(
@@ -134,6 +276,11 @@ class GeolinesQCPlugin:
             ]
         )
         output_layer.updateFields()
+        self.iface.messageBar().pushMessage(
+            "Info",
+            "Starting analysis...",
+            level=Qgis.Info,
+        )
 
         # Initialize progress dialog
         progress = QProgressDialog(
@@ -181,9 +328,7 @@ class GeolinesQCPlugin:
 
         # Add the output layer to the map
         QgsProject.instance().addMapLayer(output_layer)
-        print(
-            "Segmentation and intersection check complete. Output layer added to the map."
-        )
+
         self.iface.messageBar().pushMessage(
             "Info",
             "Segmentation and intersection check complete. Output layer added to the map.",
@@ -278,7 +423,7 @@ class GeolinesQCPlugin:
         self.iface.messageBar().pushMessage(
             "Info", "Starting analysis...", level=Qgis.Info
         )
-        
+
         try:
             # Create a buffer around the segment
             segment_buffer = segment.buffer(
@@ -304,5 +449,3 @@ class GeolinesQCPlugin:
             print(f"Error: {e}")
             self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
             return False
-
-
