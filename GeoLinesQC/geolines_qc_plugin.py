@@ -27,11 +27,14 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
-from GeoLinesQC import resolve
-from GeoLinesQC.utils import geometry_to_vector_layer
+# from GeoLinesQC import resolve
+# from GeoLinesQC.utils import geometry_to_vector_layer
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 100.0
+
+ADD_CLIPPED_LAYER_TO_MAP = False
+DIALOG_WIDTH = 400
 
 
 class GeolinesQCPlugin:
@@ -61,7 +64,7 @@ class GeolinesQCPlugin:
         self.iface.removePluginMenu("&GeoLines QC", self.action)
         self.iface.removeToolBarIcon(self.action)
 
-    def get_predefined_geometries(self):
+    """def get_predefined_geometries(self):
         # Load the GPGK file
         gpkg_path = resolve("data/regions.gpkg")
         layername = "regions"
@@ -111,13 +114,13 @@ class GeolinesQCPlugin:
             geometry = feature.geometry()
             self.predefined_geometries[name] = geometry
 
-        return self.predefined_geometries
+        return self.predefined_geometries"""
 
-    def get_selected_geometry(self):
+    """def get_selected_geometry(self):
         selected_name = self.geometry_combo.currentText()
         if selected_name != "None":
             return self.get_predefined_geometries()[selected_name]
-        return None
+        return None"""
 
     def run(self):
         # Create and show the dialog
@@ -128,6 +131,7 @@ class GeolinesQCPlugin:
         )
         self.dialog = QDialog()
         self.dialog.setWindowTitle("GeoLines QC")
+        self.dialog.setFixedWidth(DIALOG_WIDTH)
         layout = QVBoxLayout()
 
         # Add input fields for layers and threshold distance
@@ -145,11 +149,6 @@ class GeolinesQCPlugin:
         layout.addWidget(self.layer2_combo)
         layout.addWidget(QLabel("Buffer Distance:"))
         layout.addWidget(self.threshold_input)
-
-        # Add a dropdown for predefined geometries
-        self.geometry_combo.addItem("None")
-        for name in self.get_predefined_geometries():
-            self.geometry_combo.addItem(name)
         layout.addWidget(QLabel("Select Region:"))
         layout.addWidget(self.geometry_combo)
 
@@ -159,6 +158,11 @@ class GeolinesQCPlugin:
 
         self.layer2_combo.clear()
         self.layer2_combo.addItems([layer.name() for layer in layers])
+
+        # Add a dropdown for predefined geometries
+        self.geometry_combo.clear()
+        self.geometry_combo.addItem("None")
+        self.geometry_combo.addItems([layer.name() for layer in layers])
 
         # Add a button to run the analysis
         self.run_button = QPushButton("Run Analysis")
@@ -208,8 +212,10 @@ class GeolinesQCPlugin:
     def analyze_layers(self):
         # Get selected layers
         # TODO check validiy
+        mask_layer_name_full = None
         layer1_name = self.layer1_combo.currentText()
         layer2_name = self.layer2_combo.currentText()
+        mask_layer_name = self.geometry_combo.currentText()
         buffer_distance = (
             float(self.threshold_input.text())
             if self.threshold_input.text()
@@ -224,19 +230,17 @@ class GeolinesQCPlugin:
 
         input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
         reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
+        if mask_layer_name:
+            mask_layer_name_full = QgsProject.instance().mapLayersByName(
+                mask_layer_name
+            )[0]
 
         # Get the selected region layer
-        region_geometry = (
+        """region_geometry = (
             self.get_selected_geometry()
-        )  # Assuming this returns a QgsVectorLayer
+        )  # Assuming this returns a QgsVectorLayer"""
 
-        self.iface.messageBar().pushMessage(
-            "Info",
-            "Clipping data...",
-            level=Qgis.Info,
-        )
-
-        if not region_geometry:
+        if not mask_layer_name:
             self.iface.messageBar().pushMessage(
                 "Info",
                 "No region selected. Using the full dataset",
@@ -245,20 +249,26 @@ class GeolinesQCPlugin:
             input_layer = input_layer_full
             reference_layer = reference_layer_full
         else:
+            self.iface.messageBar().pushMessage(
+                "Info",
+                "Clipping data...",
+                level=Qgis.Info,
+            )
             # Convert the region geometry to a vector layer
-            region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
+            # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
+            region_layer = mask_layer_name_full
             # Clip layer1 to the selected region
             input_layer = self.clip_layer_with_processing(
-                input_layer_full, region_layer, "Clipped Layer 1"
+                input_layer_full, region_layer, f"Clipped {layer1_name}"
             )
-            if input_layer:
+            if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
                 QgsProject.instance().addMapLayer(input_layer)
 
             # Clip layer2 to the selected region
             reference_layer = self.clip_layer_with_processing(
-                reference_layer_full, region_layer, "Clipped Layer 2"
+                reference_layer_full, region_layer, f"Clipped {layer2_name}"
             )
-            if reference_layer:
+            if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
                 QgsProject.instance().addMapLayer(reference_layer)
 
         # Create a new memory layer to store the segmented lines with intersection results
@@ -341,6 +351,7 @@ class GeolinesQCPlugin:
             "Segmentation and intersection check complete. Output layer added to the map.",
             level=Qgis.Success,
         )
+        self.dialog.close()
 
     def segment_line(self, line, segment_length):
         """
