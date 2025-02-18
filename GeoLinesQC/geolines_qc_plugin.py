@@ -44,6 +44,8 @@ class GeolinesQCPlugin:
         self.actions = []
         self.menu = self.tr("&GeoLines QC")
         self.predefined_geometries = {}
+        # Get the path to your plugin directory
+        self.styles_dir = os.path.join(self.plugin_dir, "styles")
 
     def tr(self, message):
         return QCoreApplication.translate("GeoLinesQC", message)
@@ -351,9 +353,6 @@ class GeolinesQCPlugin:
 
                 output_layer.dataProvider().addFeature(new_feature)
 
-        # Add the output layer to the map
-        QgsProject.instance().addMapLayer(output_layer)
-
         self.iface.messageBar().pushMessage(
             "Info",
             "Segmentation and intersection check complete. Output layer added to the map.",
@@ -366,12 +365,43 @@ class GeolinesQCPlugin:
             "Segmentation and intersection check complete. Output layer added to the map.",
             level=Qgis.Success,
         )
+        # Load style and add to map
+        self.add_styled_layer(output_layer, "intersects")
+
         self.dialog.close()
+
+    def add_styled_layer(self, layer, style_name):
+        """
+        Add a layer to the map with a predefined style
+
+        Args:
+            layer: QgsVectorLayer to add
+            style_name: Name of the style file (without .qml extension)
+        """
+        # Construct path to style file
+        style_path = os.path.join(self.styles_dir, f"{style_name}.qml")
+
+        if not os.path.exists(style_path):
+            self.iface.messageBar().pushMessage(
+                "Style Error", f"Style file not found: {style_path}", level=Qgis.Warning
+            )
+            QgsProject.instance().addMapLayer(layer)
+            return
+
+        # Load the style
+        success = layer.loadNamedStyle(style_path)
+        if not success[1]:
+            self.iface.messageBar().pushMessage(
+                "Style Error", f"Failed to load style: {success[0]}", level=Qgis.Warning
+            )
+
+        # Add layer to the map
+        QgsProject.instance().addMapLayer(layer)
 
     def log_debug(self, message, show_in_bar=False):
         """Unified logging function that writes to both log file and QGIS log"""
         # Log to QGIS Message Log
-        QgsMessageLog.logMessage(message, "LineSplitter", level=Qgis.Info)
+        QgsMessageLog.logMessage(message, "segment_line", level=Qgis.Info)
 
         # Optionally show in message bar
         if show_in_bar:
@@ -382,7 +412,7 @@ class GeolinesQCPlugin:
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
 
-        log_file = os.path.join(log_dir, "line_splitter_debug.log")
+        log_file = os.path.join(log_dir, "segment_line_debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with open(log_file, "a") as f:
@@ -404,26 +434,26 @@ class GeolinesQCPlugin:
 
             # Check geometry type
             geom_type = line.wkbType()
-            self.log_debug(
-                f"Processing geometry type: {QgsWkbTypes.displayString(geom_type)}"
-            )
+            # self.log_debug(
+            #    f"Processing geometry type: {QgsWkbTypes.displayString(geom_type)}"
+            # )
 
             # Handle MultiLineString
             if QgsWkbTypes.isMultiType(geom_type):
-                self.log_debug("Processing MultiLineString geometry")
+                # self.log_debug("Processing MultiLineString geometry")
                 for part in line.asGeometryCollection():
-                    self.log_debug(f"Processing part with length: {part.length()}")
+                    # self.log_debug(f"Processing part with length: {part.length()}")
                     segments = self.segment_single_line(part, segment_length)
                     new_segments.extend(segments)
             # Handle single LineString
             else:
-                self.log_debug("Processing single LineString geometry")
+                # self.log_debug("Processing single LineString geometry")
                 new_segments = self.segment_single_line(line, segment_length)
 
             summary = f"\nTotal segments created: {len(new_segments)}"
             for idx, seg in enumerate(new_segments):
                 summary += f"\nSegment {idx} length: {seg.length()}"
-            self.log_debug(summary)
+            # self.log_debug(summary)
 
             return new_segments
 
@@ -446,16 +476,16 @@ class GeolinesQCPlugin:
         """
         try:
             # Debug: Log input parameters
-            self.log_debug(f"Input line length: {line.length()}")
-            self.log_debug(f"Requested segment length: {segment_length}")
+            # self.log_debug(f"Input line length: {line.length()}")
+            # self.log_debug(f"Requested segment length: {segment_length}")
 
             # Extract vertices from the line
             vertices = line.asPolyline()
-            self.log_debug(f"Number of vertices in input line: {len(vertices)}")
+            # self.log_debug(f"Number of vertices in input line: {len(vertices)}")
 
             if len(vertices) < 2:
-                msg = "Invalid line: Not enough vertices."
-                self.log_debug(msg, show_in_bar=True)
+                # msg = "Invalid line: Not enough vertices."
+                # self.log_debug(msg, show_in_bar=True)
                 return [line]
 
             new_segments = []
@@ -468,40 +498,40 @@ class GeolinesQCPlugin:
                 segment = QgsGeometry.fromPolyline([prev_point, current_point])
                 segment_length_current = segment.length()
 
-                self.log_debug(f"Processing vertex {i}:")
-                self.log_debug(f"Current segment length: {segment_length_current}")
-                self.log_debug(
-                    f"Accumulated length before processing: {accumulated_length}"
-                )
+                # self.log_debug(f"Processing vertex {i}:")
+                # self.log_debug(f"Current segment length: {segment_length_current}")
+                # self.log_debug(
+                #     f"Accumulated length before processing: {accumulated_length}"
+                # )
 
                 while accumulated_length + segment_length_current >= segment_length:
                     remaining_length = segment_length - accumulated_length
-                    self.log_debug(
-                        f"Splitting segment - Remaining length: {remaining_length}"
-                    )
+                    # self.log_debug(
+                    #    f"Splitting segment - Remaining length: {remaining_length}"
+                    # )
 
                     if remaining_length <= 0:
-                        self.log_debug(
-                            "Warning: Remaining length is zero or negative",
-                            show_in_bar=True,
-                        )
+                        # self.log_debug(
+                        #    "Warning: Remaining length is zero or negative",
+                        #    show_in_bar=True,
+                        # )
                         break
 
                     if remaining_length >= segment_length_current:
-                        self.log_debug(
-                            "Warning: Remaining length exceeds current segment length",
-                            show_in_bar=True,
-                        )
+                        # self.log_debug(
+                        #    "Warning: Remaining length exceeds current segment length",
+                        #    show_in_bar=True,
+                        # )
                         break
 
                     cut_point = segment.interpolate(remaining_length).asPoint()
-                    self.log_debug(
-                        f"Cut point created at: ({cut_point.x()}, {cut_point.y()})"
-                    )
+                    # self.log_debug(
+                    #    f"Cut point created at: ({cut_point.x()}, {cut_point.y()})"
+                    # )
 
                     current_segment.append(QgsPoint(cut_point))
                     new_segment = QgsGeometry.fromPolyline(current_segment)
-                    self.log_debug(f"New segment length: {new_segment.length()}")
+                    # self.log_debug(f"New segment length: {new_segment.length()}")
                     new_segments.append(new_segment)
 
                     current_segment = [QgsPoint(cut_point)]
@@ -511,22 +541,22 @@ class GeolinesQCPlugin:
                         [QgsPoint(cut_point), current_point]
                     )
                     segment_length_current = segment.length()
-                    self.log_debug(
-                        f"Remaining segment length after cut: {segment_length_current}"
-                    )
+                    # self.log_debug(
+                    #    f"Remaining segment length after cut: {segment_length_current}"
+                    # )
 
                 current_segment.append(current_point)
                 accumulated_length += segment_length_current
-                self.log_debug(
-                    f"Accumulated length after processing: {accumulated_length}"
-                )
+                # self.log_debug(
+                #    f"Accumulated length after processing: {accumulated_length}"
+                # )
 
             # Add the last segment if it has more than one point
             if len(current_segment) > 1:
                 final_segment = QgsGeometry.fromPolyline(current_segment)
-                self.log_debug(
-                    f"Adding final segment with length: {final_segment.length()}"
-                )
+                # self.log_debug(
+                #    f"Adding final segment with length: {final_segment.length()}"
+                # )
                 new_segments.append(final_segment)
 
             return new_segments
