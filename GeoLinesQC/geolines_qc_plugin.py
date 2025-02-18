@@ -16,6 +16,7 @@ from qgis.core import (
     QgsSpatialIndex,
     QgsVectorLayer,
     QgsWkbTypes,
+    QgsProcessingFeatureSourceDefinition,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
@@ -30,11 +31,18 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
 
 ADD_CLIPPED_LAYER_TO_MAP = False
 DIALOG_WIDTH = 400
+
+
+class ClipError(Exception):
+    """Custom exception for clipping operations"""
+
+    pass
 
 
 class GeolinesQCPlugin:
@@ -182,40 +190,56 @@ class GeolinesQCPlugin:
 
     def clip_layer_with_processing(self, layer, region_layer, layer_name):
         """
-        Clips a layer using the QGIS processing tool.
+        Clips a layer using selected features from region_layer or the whole layer if nothing is selected.
 
         Args:
-            layer (QgsVectorLayer): The layer to clip.
-            region_layer (QgsVectorLayer): The region layer to clip with.
-            layer_name (str): Name of the clipped layer.
+            layer: Input layer to be clipped
+            region_layer: Layer containing the clip features
+            layer_name: Name for the output layer
 
         Returns:
-            QgsVectorLayer: The clipped layer, or None if an error occurs.
+            QgsVectorLayer: The clipped layer
+
+        Raises:
+            ClipError: If the resulting layer is empty or invalid
         """
-        try:
-            # Run the clip algorithm
-            result = processing.run(
-                "qgis:clip",
-                {
-                    "INPUT": layer,
-                    "OVERLAY": region_layer,
-                    "OUTPUT": "memory:",
-                },
+        # Create the processing parameters
+        params = {"INPUT": layer, "OUTPUT": "memory:" + layer_name}
+
+        # Check if there are selected features
+        if region_layer.selectedFeatureCount() > 0:
+            # Use only selected features for clipping
+            self.log_debug(
+                f"Using {region_layer.selectedFeatureCount()} selected features for clipping"
+            )
+            params["OVERLAY"] = QgsProcessingFeatureSourceDefinition(
+                region_layer.id(), selectedFeaturesOnly=True
+            )
+        else:
+            # Use all features if nothing is selected
+            self.log_debug("No features selected, using entire overlay layer")
+            params["OVERLAY"] = region_layer
+
+        # Run the clip processing algorithm
+        result = processing.run("native:clip", params)
+
+        # Get the output layer
+        clipped_layer = result["OUTPUT"]
+
+        # If the result is a string (file path) load it as a layer
+        if isinstance(clipped_layer, str):
+            clipped_layer = QgsVectorLayer(clipped_layer, layer_name, "ogr")
+
+        # Check if the layer is valid and has features
+        if not clipped_layer.isValid():
+            raise ClipError("Failed to create valid clipped layer")
+
+        if clipped_layer.featureCount() == 0:
+            raise ClipError(
+                "Clipping resulted in empty layer - no overlapping features found"
             )
 
-            # Get the clipped layer
-            clipped_layer = result["OUTPUT"]
-            clipped_layer.setName(layer_name)
-
-            return clipped_layer
-
-        except Exception as e:
-            self.iface.messageBar().pushMessage(
-                "Error",
-                f"Failed to clip layer: {str(e)}",
-                level=Qgis.Critical,
-            )
-            return None
+        return clipped_layer
 
     def analyze_layers(self):
         # Get selected layers
@@ -268,16 +292,42 @@ class GeolinesQCPlugin:
             # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
             region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
             # Clip layer1 to the selected region
-            input_layer = self.clip_layer_with_processing(
-                input_layer_full, region_layer, f"Clipped {layer1_name}"
-            )
+            try:
+                input_layer = self.clip_layer_with_processing(
+                    input_layer_full, region_layer, f"Clipped {layer1_name}"
+                )
+
+            except ClipError as e:
+                self.iface.messageBar().pushMessage(
+                    "Error", str(e), level=Qgis.Critical
+                )
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Error",
+                    f"Unexpected error during clipping: {str(e)}",
+                    level=Qgis.Critical,
+                )
+
+            # TODO
             if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
                 QgsProject.instance().addMapLayer(input_layer)
 
             # Clip layer2 to the selected region
-            reference_layer = self.clip_layer_with_processing(
-                reference_layer_full, region_layer, f"Clipped {layer2_name}"
-            )
+            try:
+                reference_layer = self.clip_layer_with_processing(
+                    reference_layer_full, region_layer, f"Clipped {layer2_name}"
+                )
+
+            except ClipError as e:
+                self.iface.messageBar().pushMessage(
+                    "Error", str(e), level=Qgis.Critical
+                )
+            except Exception as e:
+                self.iface.messageBar().pushMessage(
+                    "Error",
+                    f"Unexpected error during clipping: {str(e)}",
+                    level=Qgis.Critical,
+                )
             if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
                 QgsProject.instance().addMapLayer(reference_layer)
 
