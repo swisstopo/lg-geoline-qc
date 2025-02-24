@@ -1,0 +1,15 @@
+[general]
+name=GeoLines QC
+description=Checks if features in one layer are within a specified distance of features in a reference layer.
+version=0.0.0
+qgisMinimumVersion=3.0
+qgisMaximumVersion=3.99
+author=Swiss Geological Survey
+email=geocover@swisstopo.ch
+icon=icons8-line-chart-50.png
+
+homepage=https://github.com/procrastinatio/lg-geolines-qc
+tracker=https://github.com/procrastinatio/lg-geolines-qc/issues
+repository=https://github.com/procrastinatio/lg-geolines-qc
+about=QGis plugins to assess quality of digitalized geological boundaries
+tags=geocover, geology, tectonic, 3d
