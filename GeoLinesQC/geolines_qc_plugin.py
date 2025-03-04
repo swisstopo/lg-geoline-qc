@@ -46,7 +46,7 @@ if hasattr(QApplication, 'setAttribute'):
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 # Set the environment variable for auto screen scaling
-os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = 1
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
 
 class ClipError(Exception):
