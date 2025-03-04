@@ -18,7 +18,7 @@ from qgis.core import (
     QgsWkbTypes,
     QgsProcessingFeatureSourceDefinition,
 )
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
+from qgis.PyQt.QtCore import QCoreApplication, QApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -37,6 +37,14 @@ DEFAULT_SEGMENT_LENGTH = 200.0
 
 ADD_CLIPPED_LAYER_TO_MAP = False
 DIALOG_WIDTH = 400
+
+# Enable high DPI scaling
+if hasattr(QApplication, 'setAttribute'):
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
+# Set the environment variable for auto screen scaling
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = 1
 
 
 class ClipError(Exception):
