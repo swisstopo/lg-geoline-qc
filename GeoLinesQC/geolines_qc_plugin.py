@@ -18,9 +18,10 @@ from qgis.core import (
     QgsWkbTypes,
     QgsProcessingFeatureSourceDefinition,
 )
-from qgis.PyQt.QtCore import QCoreApplication, QApplication, Qt, QVariant
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
+    QApplication,
     QAction,
     QComboBox,
     QDialog,
@@ -30,6 +31,7 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+
 
 
 DEFAULT_BUFFER = 500.0
