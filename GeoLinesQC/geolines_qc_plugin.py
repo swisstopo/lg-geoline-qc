@@ -405,12 +405,17 @@ class GeolinesQCPlugin:
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(segment)
 
-                # Check for intersections with the reference layer
-                intersects = self.buffer_and_check_intersections(
-                    segment, reference_layer, buffer_distance
-                )
-                new_feature.setAttribute("intersects", intersects)
+                # Check if the segment has MP_Boundary attribute set to True/yes
+                if segment.attribute("MP_Boundary") in [True, "True", "yes", "Yes"]:
+                    # Use exact intersection check
+                    intersects = self.check_exact_intersection(segment, reference_layer)
+                else:
+                    # Use the original buffer intersection method
+                    intersects = self.buffer_and_check_intersections(
+                        segment, reference_layer, buffer_distance
+                    )
 
+                new_feature.setAttribute("intersects", intersects)
                 output_layer.dataProvider().addFeature(new_feature)
 
         self.iface.messageBar().pushMessage(
@@ -627,6 +632,27 @@ class GeolinesQCPlugin:
             error_msg = f"Error in segment_single_line: {str(e)}\nTraceback:\n{traceback.format_exc()}"
             self.log_debug(error_msg, show_in_bar=True)
             return [line]
+
+    def check_exact_intersection(self, segment, reference_layer):
+        """
+        Check if a segment geometry is exactly on (intersects exactly with) the reference layer.
+
+        Args:
+            segment (QgsGeometry): The segment geometry to check
+            reference_layer (QgsVectorLayer): The reference layer to check against
+
+        Returns:
+            bool: True if the segment is exactly on the reference layer, False otherwise
+        """
+        # Iterate through features in the reference layer
+        for reference_feature in reference_layer.getFeatures():
+            reference_geom = reference_feature.geometry()
+
+            # Use QgsGeometry methods to check for exact intersection
+            if segment.intersects(reference_geom) and segment.equals(reference_geom):
+                return True
+
+        return False
 
     def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
         """
