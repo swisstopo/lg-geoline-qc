@@ -32,3 +32,6 @@ A new temporary file with the combined name of the tested layer will be added to
 with a new field `intersects` set to `True/False`
 
 ![the picture](assets/Results.png)
+
+> **_NOTE:_**  Lines defining boundaries between 3D modelling project should have an attribute `MP_Boundary` set
+to `True` (or `yes`, `Yes`). The tolerance for these lines is minimale (about 0.001 meter)

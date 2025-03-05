@@ -12,11 +12,11 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
+    QgsProcessingFeatureSourceDefinition,
     QgsProject,
     QgsSpatialIndex,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsProcessingFeatureSourceDefinition,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
@@ -31,6 +31,10 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from GeoLinesQC.utils import check_line_similarity
+
+# Bondary lines should not be changed, but add a small tolerance for rounding errors.
+BONDARY_TOLERANCE = 0.001
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
@@ -377,6 +381,7 @@ class GeolinesQCPlugin:
         )
 
         for i, feature in enumerate(input_layer.getFeatures()):
+            is_boundary = False
             # Update progress bar
             if i % 10 == 0:
                 progress.setValue(i)
@@ -387,6 +392,14 @@ class GeolinesQCPlugin:
                     level=Qgis.Warning,
                 )
                 break
+
+            if "MP_Boundary" in feature.fields().names() and feature.attribute(
+                "MP_Boundary"
+            ) in [True, "True", "yes", "Yes"]:
+                is_boundary = True
+            else:
+                is_boundary = False
+
             line_geometry = feature.geometry()
             segments = self.segment_line(line_geometry, segment_length)
 
@@ -396,9 +409,18 @@ class GeolinesQCPlugin:
                 new_feature.setGeometry(segment)
 
                 # Check if the segment has MP_Boundary attribute set to True/yes
-                if segment.attribute("MP_Boundary") in [True, "True", "yes", "Yes"]:
-                    # Use exact intersection check
-                    intersects = self.check_exact_intersection(segment, reference_layer)
+                if is_boundary:
+                    # Check line overlaps
+                    # intersects = self.check_line_overlap(segment, reference_layer)
+                    intersects = self.buffer_and_check_intersections(
+                        segment, reference_layer, BONDARY_TOLERANCE
+                    )
+
+                    QgsMessageLog.logMessage(
+                        f"{i} Is  boundary: {is_boundary}: {segment.asWkt()}",
+                        "GeoLinesQC",
+                        level=Qgis.Info,
+                    )
                 else:
                     # Use the original buffer intersection method
                     intersects = self.buffer_and_check_intersections(
@@ -623,26 +645,66 @@ class GeolinesQCPlugin:
             self.log_debug(error_msg, show_in_bar=True)
             return [line]
 
-    def check_exact_intersection(self, segment, reference_layer):
+    def _compare_line_vertices(line1, line2, tolerance=0.001):
         """
-        Check if a segment geometry is exactly on (intersects exactly with) the reference layer.
+        Detailed comparison of line vertices with tolerance.
 
-        Args:
-            segment (QgsGeometry): The segment geometry to check
-            reference_layer (QgsVectorLayer): The reference layer to check against
-
-        Returns:
-            bool: True if the segment is exactly on the reference layer, False otherwise
+        :param line1: First line geometry
+        :param line2: Second line geometry
+        :param tolerance: Spatial tolerance for coordinate comparisons
+        :return: Boolean indicating if lines are similar
         """
-        # Iterate through features in the reference layer
-        for reference_feature in reference_layer.getFeatures():
-            reference_geom = reference_feature.geometry()
+        # Convert vertices to lists
+        vertices1 = [v for v in line1.vertices()]
+        vertices2 = [v for v in line2.vertices()]
 
-            # Use QgsGeometry methods to check for exact intersection
-            if segment.intersects(reference_geom) and segment.equals(reference_geom):
-                return True
+        # Check if vertex counts are close
+        if abs(len(vertices1) - len(vertices2)) > 1:
+            return False
 
-        return False
+        # Try forward and reverse matching
+        def _match_vertices(v1_list, v2_list, tolerance):
+            for i in range(len(v1_list)):
+                # Check if all vertices match within tolerance
+                if all(
+                    v1.distance(v2) <= tolerance
+                    for v1, v2 in zip(v1_list[i:] + v1_list[:i], v2_list)
+                ):
+                    return True
+            return False
+
+        # Check forward and reverse directions
+        return _match_vertices(vertices1, vertices2, tolerance) or _match_vertices(
+            vertices1[::-1], vertices2, tolerance
+        )
+
+    # Example usage in a QGIS plugin method
+    def check_line_overlap(self, segment, reference_layer):
+        """
+        Check if a line segment overlaps with lines in a reference layer.
+
+        :param segment: QgsGeometry of the line segment
+        :param reference_layer: QgsVectorLayer containing reference lines
+        :return: Boolean indicating overlap or similarity
+        """
+        try:
+            # Use the similarity check method
+            is_similar = check_line_similarity(
+                segment,
+                reference_layer,
+                tolerance=0.001,  # Adjust tolerance as needed
+            )
+
+            return is_similar
+
+        except Exception as e:
+            # Log or handle any errors
+            QgsMessageLog.logMessage(
+                f"Error in line overlap check: {str(e)}",
+                "LineComparisonPlugin",
+                Qgis.Warning,
+            )
+            return False
 
     def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
         """
