@@ -44,7 +44,7 @@ jobs:
     - name: Retrieve Built Artifact
       uses: actions/download-artifact@v4
       with:
-        name: GeoLinesQC-${{ env.VERSION }}.zip  # Must match the new name!
+        name: GeoLinesQC-${{ env.VERSION }}  # Must match the new name!
         path: .
 
     - name: Display structure of downloaded files
