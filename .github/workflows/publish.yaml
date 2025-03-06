@@ -1,0 +1,70 @@
+name: Publish QGis plugin
+'on':
+  push:
+    tags:
+      - '*'
+env:
+  PROJECT_FOLDER: GeoLinesQC
+  PYTHON_VERSION_RELEASE: '3.8'
+  QGISPLUGINCI_VERSION: '${{ github.ref_name }}'
+  PLUGIN_NAME: GeoLinesQC
+jobs:
+  build-python-wheel:
+    name: "\U0001F40D Python Wheel"
+    uses: ./.github/workflows/build.yaml
+  publish-plugin:
+    name: Publish plugin on tag
+    runs-on: ubuntu-latest
+    needs:
+      - build-python-wheel
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Extract Version from Tag
+        run: 'echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV'
+      - name: Extract Version from Tag
+        run: echo "TAG=$(git describe --tags --abbrev=0)" >> $GITHUB_ENV
+      - name: Debug Version
+        run: |
+          echo "Extracted version: ${{ env.VERSION }}"
+          echo "Extracted tag: ${{ env.TAG }}"
+      - name: Retrieve Built Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: 'GeoLinesQC.${{ env.VERSION }}'
+          path: .
+      - name: Display structure of downloaded files
+        run: |
+          ls -R
+          cp GeoLinesQC/metadata.txt .
+      - name: Generate plugins.xml
+        run: >
+          python generate_plugins_xml.py "${PLUGIN_NAME}" "${{ env.VERSION }}"
+          "${{ secrets.AWS_S3_BUCKET }}"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: '${{ secrets.AWS_KEY_ID}}'
+          aws-secret-access-key: '${{ secrets.AWS_KEY_ID }}'
+          aws-region: eu-central-1
+      - name: Upload to S3
+        run: >
+          # Upload the plugin package
+
+          aws s3 cp ${PLUGIN_NAME}.${VERSION}.zip s3://${{ secrets.AWS_S3_BUCKET
+          }}/qgis/plugins/${PLUGIN_NAME}.${{ env.VERSION }}.zip
+
+
+          # Upload the plugins.xml repository file
+
+          aws s3 cp dist/plugins.xml s3://${{ secrets.AWS_S3_BUCKET
+          }}/qgis/plugins/plugins.xml
+
+
+          echo "Plugin and repository file uploaded to S3 bucket"
