@@ -34,37 +34,30 @@ jobs:
         run: |
           echo "Extracted version: ${{ env.VERSION }}"
           echo "Extracted tag: ${{ env.TAG }}"
+          mkdir -p dist
       - name: Retrieve Built Artifact
         uses: actions/download-artifact@v4
         with:
           name: 'GeoLinesQC.${{ env.VERSION }}'
-          path: .
+          path: dist
       - name: Display structure of downloaded files
         run: |
-          ls -R
-          cp GeoLinesQC/metadata.txt .
+          ls -R dist
+          unzip -p dist/GeoLinesQC.${{ env.VERSION }}.zip GeoLinesQC/metadata.txt  > metadata.txt
       - name: Generate plugins.xml
         run: >
           python generate_plugins_xml.py "${PLUGIN_NAME}" "${{ env.VERSION }}"
-          "${{ secrets.AWS_S3_BUCKET }}"
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+          "https://dubious.cloud"
+
+      - name: Upload folder to bucket
+        uses: a-sync/s3-uploader@master
         with:
-          aws-access-key-id: '${{ secrets.AWS_KEY_ID}}'
-          aws-secret-access-key: '${{ secrets.AWS_KEY_ID }}'
-          aws-region: eu-central-1
-      - name: Upload to S3
-        run: >
-          # Upload the plugin package
+          args: --recursive --exclude "*.log"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: 'eu-central-1'
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_KEY: 'qgis/plugins'
+          FILE: './dist'
 
-          aws s3 cp ${PLUGIN_NAME}.${VERSION}.zip s3://${{ secrets.AWS_S3_BUCKET
-          }}/qgis/plugins/${PLUGIN_NAME}.${{ env.VERSION }}.zip
-
-
-          # Upload the plugins.xml repository file
-
-          aws s3 cp dist/plugins.xml s3://${{ secrets.AWS_S3_BUCKET
-          }}/qgis/plugins/plugins.xml
-
-
-          echo "Plugin and repository file uploaded to S3 bucket"

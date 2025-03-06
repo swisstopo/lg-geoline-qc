@@ -23,10 +23,10 @@ def read_metadata(metadata_file):
     return metadata
 
 
-def create_plugins_xml(plugin_name, version, metadata, bucket_name):
+def create_plugins_xml(plugin_name, version, metadata, base_url):
     """Create the plugins.xml file structure."""
     root = ET.Element("plugins")
-    plugin = ET.SubElement(root, "pyqgis_plugin", name=plugin_name, version=version)
+    plugin = ET.SubElement(root, "pyqgis_plugin", name="GeoLines QC", version=version)
 
     # Add required elements
     ET.SubElement(plugin, "description").text = metadata.get("description", "")
@@ -34,11 +34,11 @@ def create_plugins_xml(plugin_name, version, metadata, bucket_name):
     ET.SubElement(plugin, "qgis_minimum_version").text = metadata.get(
         "qgisMinimumVersion", "3.0"
     )
-    ET.SubElement(plugin, "file_name").text = f"{plugin_name}_{version}.zip"
+    ET.SubElement(plugin, "file_name").text = f"{plugin_name}.{version}.zip"
     ET.SubElement(plugin, "author_name").text = metadata.get("author", "")
 
     # Download URL
-    download_url = f"https://{bucket_name}.s3.amazonaws.com/qgis/plugins/{plugin_name}.{version}.zip"
+    download_url = f"{base_url}/qgis/plugins/{plugin_name}.{version}.zip"
     ET.SubElement(plugin, "download_url").text = download_url
 
     # Add metadata
@@ -65,12 +65,12 @@ def create_plugins_xml(plugin_name, version, metadata, bucket_name):
 def main():
     """Main function."""
     if len(sys.argv) < 4:
-        print("Usage: python generate_plugins_xml.py PLUGIN_NAME VERSION BUCKET_NAME")
+        print("Usage: python generate_plugins_xml.py PLUGIN_NAME VERSION BASE_URL")
         sys.exit(1)
 
     plugin_name = sys.argv[1]
     version = sys.argv[2]
-    bucket_name = sys.argv[3]
+    base_url = sys.argv[3]
     metadata_file = "metadata.txt"
 
     if not os.path.exists(metadata_file):
@@ -78,7 +78,7 @@ def main():
         sys.exit(1)
 
     metadata = read_metadata(metadata_file)
-    xml_content = create_plugins_xml(plugin_name, version, metadata, bucket_name)
+    xml_content = create_plugins_xml(plugin_name, version, metadata, base_url)
 
     # Write to file
     output_dir = "dist"
