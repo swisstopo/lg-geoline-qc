@@ -351,6 +351,11 @@ class GeolinesQCPlugin:
             "Starting analysis...",
             level=Qgis.Info,
         )
+        QgsMessageLog.logMessage(
+             "Starting analysis...",
+            "GeoLinesQC",
+            level=Qgis.Info,
+        )
 
         # Initialize progress dialog
         progress = QProgressDialog(
@@ -375,6 +380,7 @@ class GeolinesQCPlugin:
             "GeoLinesQC",
             level=Qgis.Info,
         )
+        nb_segments = 0
 
         for i, feature in enumerate(input_layer.getFeatures()):
             # Update progress bar
@@ -389,9 +395,12 @@ class GeolinesQCPlugin:
                 break
             line_geometry = feature.geometry()
             segments = self.segment_line(line_geometry, segment_length)
+            summary = f"Feature {i} has {len(segments)} segments"
+            self.log_debug(summary)
 
             # Add each segment to the output layer with intersection results
             for segment in segments:
+                nb_segments += 1
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(segment)
 
@@ -403,16 +412,16 @@ class GeolinesQCPlugin:
 
                 output_layer.dataProvider().addFeature(new_feature)
 
-        self.iface.messageBar().pushMessage(
+        '''self.iface.messageBar().pushMessage(
             "Info",
-            "Segmentation and intersection check complete. Output layer added to the map.",
+            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
             level=Qgis.Info,
-        )
+        )'''
         # Close the progress dialog
         progress.setValue(input_layer.featureCount())
         self.iface.messageBar().pushMessage(
             "Success",
-            "Segmentation and intersection check complete. Output layer added to the map.",
+            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
             level=Qgis.Success,
         )
         # Load style and add to map
@@ -451,7 +460,7 @@ class GeolinesQCPlugin:
     def log_debug(self, message, show_in_bar=False):
         """Unified logging function that writes to both log file and QGIS log"""
         # Log to QGIS Message Log
-        QgsMessageLog.logMessage(message, "segment_line", level=Qgis.Info)
+        QgsMessageLog.logMessage(message, "GeoLinesQC", level=Qgis.Info)
 
         # Optionally show in message bar
         if show_in_bar:
@@ -462,7 +471,7 @@ class GeolinesQCPlugin:
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
 
-        log_file = os.path.join(log_dir, "segment_line_debug.log")
+        log_file = os.path.join(log_dir, "GeoLinesQC_debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with open(log_file, "a") as f:
