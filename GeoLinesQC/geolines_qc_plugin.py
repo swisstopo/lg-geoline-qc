@@ -187,6 +187,40 @@ class GeolinesQCPlugin:
         self.dialog.setLayout(layout)
         self.dialog.exec_()
 
+    def extract_within_distance_with_processing(
+        self, layer_to_check, ref_layer, distance, layer_name
+    ):
+        # Create the processing parameters
+        # We want to filter out features of the reference layer which are too far from the layer to check (inverted logic)
+        extract_within_params = {
+            "INPUT": ref_layer,  # Layer to extract features from
+            "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
+            "INTERSECT": layer_to_check,  # Reference layer for distance comparison
+            "DISTANCE": distance,  # The distance threshold (in layer's CRS units)
+            "OUTPUT": "memory:" + layer_name,  # Output layer (temporary)
+        }
+
+        # Run the clip processing algorithm
+        result = processing.run("native:extractbylocation", extract_within_params)
+
+        # Get the output layer
+        clipped_layer = result["OUTPUT"]
+
+        # If the result is a string (file path) load it as a layer
+        if isinstance(clipped_layer, str):
+            clipped_layer = QgsVectorLayer(clipped_layer, layer_name, "ogr")
+
+        # Check if the layer is valid and has features
+        if not clipped_layer.isValid():
+            raise ClipError("Failed to create valid clipped layer")
+
+        if clipped_layer.featureCount() == 0:
+            raise ClipError(
+                "Clipping resulted in empty layer - no overlapping features found"
+            )
+
+        return clipped_layer
+
     def clip_layer_with_processing(self, layer, region_layer, layer_name):
         """
         Clips a layer using selected features from region_layer or the whole layer if nothing is selected.
@@ -327,8 +361,26 @@ class GeolinesQCPlugin:
                     f"Unexpected error during clipping: {str(e)}",
                     level=Qgis.Critical,
                 )
-            if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
-                QgsProject.instance().addMapLayer(reference_layer)
+
+        # Extract features of ref layer within distance
+        try:
+            reference_layer = self.extract_within_distance_with_processing(
+                input_layer,
+                reference_layer,
+                buffer_distance * 1.05,
+                f"Clipped {layer2_name}",
+            )
+
+        except ClipError as e:
+            self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Error",
+                f"Unexpected error during extracting from distance: {str(e)}",
+                level=Qgis.Critical,
+            )
+        if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
+            QgsProject.instance().addMapLayer(reference_layer)
 
         # Create a new memory layer to store the segmented lines with intersection results
         output_layer = QgsVectorLayer(
