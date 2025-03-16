@@ -12,11 +12,11 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
+    QgsProcessingFeatureSourceDefinition,
     QgsProject,
     QgsSpatialIndex,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsProcessingFeatureSourceDefinition,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
@@ -31,8 +31,6 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
-
-
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
@@ -362,7 +360,7 @@ class GeolinesQCPlugin:
             level=Qgis.Info,
         )
         QgsMessageLog.logMessage(
-             "Starting analysis...",
+            "Starting analysis...",
             "GeoLinesQC",
             level=Qgis.Info,
         )
@@ -422,11 +420,11 @@ class GeolinesQCPlugin:
 
                 output_layer.dataProvider().addFeature(new_feature)
 
-        '''self.iface.messageBar().pushMessage(
+        """self.iface.messageBar().pushMessage(
             "Info",
             f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
             level=Qgis.Info,
-        )'''
+        )"""
         # Close the progress dialog
         progress.setValue(input_layer.featureCount())
         self.iface.messageBar().pushMessage(
