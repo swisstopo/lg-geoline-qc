@@ -31,8 +31,11 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+from qgis.core import QgsTask, QgsApplication, QgsProcessingFeedback, QgsMessageLog, Qgis, QgsProject
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 
 from GeoLinesQC.utils import create_spatial_index
+from GeoLinesQC.task import ExtractionTask
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
@@ -351,6 +354,77 @@ class GeolinesQCPlugin:
 
         return clipped_layer
 
+    # Add this as a method to your GeolinesQCPlugin class
+    def extract_within_distance_background(self, layer_to_check, ref_layer, distance, layer_name, callback=None):
+        """
+        Extract features within distance using a background task with progress dialog
+
+        Args:
+            layer_to_check: Layer to check distance against
+            ref_layer: Layer to extract features from
+            distance: Distance threshold
+            layer_name: Name for the output layer
+            callback: Function to call when extraction is complete, will receive output_layer as parameter
+        """
+        from qgis.PyQt.QtWidgets import QProgressDialog
+        from qgis.PyQt.QtCore import Qt, QTimer
+
+        # Create the progress dialog
+        progress = QProgressDialog("Extracting features within distance...", "Cancel", 0, 100, self.iface.mainWindow())
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)  # Show immediately
+
+        # Create the background task
+        task = ExtractionTask("Extract features within distance", ref_layer, layer_to_check, distance, layer_name)
+
+        # Connect to task completion
+        def on_task_completed(success):
+            # Close progress dialog
+            progress.close()
+
+            if success:
+                QgsMessageLog.logMessage(
+                    f"Extraction complete. Found {task.output_layer.featureCount()} features within distance",
+                    "GeolinesQC")
+                # Call the callback with the output layer
+                if callback:
+                    callback(task.output_layer)
+            else:
+                QgsMessageLog.logMessage("Extraction failed", "GeolinesQC", level=Qgis.Critical)
+                if task.exception:
+                    # Show error to user
+                    self.iface.messageBar().pushMessage("Error",
+                                                        f"Extraction failed: {str(task.exception)}",
+                                                        level=Qgis.Critical)
+
+        # Connect progress dialog cancel button to task cancellation
+        def on_cancel_clicked():
+            QgsMessageLog.logMessage("User canceled extraction", "GeolinesQC")
+            task.cancel()
+
+        # Connect signals
+        progress.canceled.connect(on_cancel_clicked)
+        task.taskCompleted.connect(on_task_completed)
+        task.taskTerminated.connect(lambda: progress.close())
+
+        # Setup periodic progress updates
+        timer = QTimer(self.iface.mainWindow())
+
+        def update_progress():
+            if task.feedback:
+                progress.setValue(int(task.feedback.progress()))
+                # Check if task is done or canceled
+                if task.feedback.isCanceled() or not task.isActive():
+                    timer.stop()
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)  # Update every 100ms
+
+        # Add task to QGIS task manager and start it
+        QgsApplication.taskManager().addTask(task)
+        progress.show()
+
     def analyze_layers(self):
         # Get selected layers
         # TODO check validiy
@@ -450,6 +524,27 @@ class GeolinesQCPlugin:
         # Extract features of ref layer within distance
         self.log_debug(
             f"Selecting reference data within {buffer_distance}...", show_in_bar=False
+        )
+
+        def handle_extraction_result(output_layer):
+            # Now you have the output layer with features within the distance
+            # You can continue with your analysis here
+            QgsMessageLog.logMessage(f"Extraction complete. Processing {output_layer.featureCount()} features",
+                                     "GeolinesQC")
+
+            # Add the layer to the project if needed
+            QgsProject.instance().addMapLayer(output_layer)
+
+            # Continue with your analysis on the extracted layer
+            # For example:
+            self.process_extracted_features(output_layer, layer2)
+
+            # Update UI to indicate completion
+            self.iface.messageBar().pushMessage("Success", "Analysis complete", level=Qgis.Success)
+
+        # Start the extraction in background
+        self.extract_within_distance_background(
+            input_layer, reference_layer, buffer_distance, "Extracted_Features", callback=handle_extraction_result
         )
         try:
             reference_layer = self.extract_within_distance_with_processing(
