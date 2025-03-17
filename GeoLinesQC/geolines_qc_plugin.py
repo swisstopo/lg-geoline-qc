@@ -198,7 +198,7 @@ class GeolinesQCPlugin:
         self.dialog.setLayout(layout)
         self.dialog.exec_()
 
-    def extract_within_distance_with_processing(
+    def extract_within_distance_with_processing_ori(
         self, layer_to_check, ref_layer, distance, layer_name
     ):
         # Create the processing parameters
@@ -231,6 +231,72 @@ class GeolinesQCPlugin:
             )
 
         return clipped_layer
+
+    def extract_within_distance_with_processing(
+            self, layer_to_check, ref_layer, distance, layer_name
+    ):
+        from qgis.PyQt.QtWidgets import QProgressDialog
+        from qgis.PyQt.QtCore import Qt
+        from qgis.core import QgsMessageLog, Qgis
+
+        # Get feature counts to estimate progress
+        ref_feature_count = ref_layer.featureCount()
+
+        # Create a progress dialog
+        progress = QProgressDialog("Extracting features within distance...", "Cancel", 0, 100, self.iface.mainWindow())
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setValue(0)
+        progress.show()
+
+        try:
+            # Create the processing parameters
+            extract_within_params = {
+                "INPUT": ref_layer,  # Layer to extract features from
+                "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
+                "INTERSECT": layer_to_check,  # Reference layer for distance comparison
+                "DISTANCE": distance,  # The distance threshold (in layer's CRS units)
+                "OUTPUT": "memory:" + layer_name,  # Output layer (temporary)
+            }
+
+            # Since processing.run doesn't provide progress updates, we'll use runAndLoadResults
+            # which will at least show the algorithm's own progress
+            progress.setValue(10)  # Show that we've started
+            QgsMessageLog.logMessage(f"Starting extraction within {distance} units", "DistanceExtraction")
+
+            # Run the clip processing algorithm
+            result = processing.run("native:extractbylocation", extract_within_params, feedback=None)
+
+            # Get the output layer
+            output_layer = result["OUTPUT"]
+
+            # Show completion progress
+            progress.setValue(100)
+            QgsMessageLog.logMessage(
+                f"Extraction complete. Found {output_layer.featureCount()} features within distance",
+                "DistanceExtraction")
+
+            # If the result is a string (file path) load it as a layer
+            if isinstance(output_layer, str):
+                output_layer = QgsVectorLayer(output_layer, layer_name, "ogr")
+
+            # Check if the layer is valid and has features
+            if not output_layer.isValid():
+                raise ClipError("Failed to create valid clipped layer")
+
+            if output_layer.featureCount() == 0:
+                raise ClipError(
+                    "Clipping resulted in empty layer - no overlapping features found"
+                )
+
+            return output_layer
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Error during extraction: {str(e)}", "DistanceExtraction", level=Qgis.Critical)
+            progress.cancel()
+            raise e
+        finally:
+            # Make sure the progress dialog is closed
+            progress.close()
 
     def clip_layer_with_processing(self, layer, region_layer, layer_name):
         """
@@ -387,6 +453,7 @@ class GeolinesQCPlugin:
         )
         try:
             reference_layer = self.extract_within_distance_with_processing(
+
                 input_layer,
                 reference_layer,
                 buffer_distance * 1.05,
