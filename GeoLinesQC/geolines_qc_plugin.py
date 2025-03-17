@@ -21,8 +21,8 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
-    QApplication,
     QAction,
+    QApplication,
     QComboBox,
     QDialog,
     QLabel,
@@ -32,14 +32,16 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+from GeoLinesQC.utils import create_spatial_index
+
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
 
-ADD_CLIPPED_LAYER_TO_MAP = False
+ADD_CLIPPED_LAYER_TO_MAP = True
 DIALOG_WIDTH = 400
 
 # Enable high DPI scaling
-if hasattr(QApplication, 'setAttribute'):
+if hasattr(QApplication, "setAttribute"):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
@@ -307,9 +309,13 @@ class GeolinesQCPlugin:
             "Loading data...",
             level=Qgis.Info,
         )
+        self.log_debug("Loading data...", show_in_bar=False)
 
         input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
         reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
+        # Create Spatial Indices
+        create_spatial_index(input_layer_full)
+        create_spatial_index(reference_layer_full)
 
         # Get the selected region layer
         """region_geometry = (
@@ -330,6 +336,7 @@ class GeolinesQCPlugin:
                 "Clipping data...",
                 level=Qgis.Info,
             )
+            self.log_debug("Clipping data...", show_in_bar=False)
             # Convert the region geometry to a vector layer
             # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
             region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
@@ -353,12 +360,15 @@ class GeolinesQCPlugin:
             # TODO
             if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
                 QgsProject.instance().addMapLayer(input_layer)
+                create_spatial_index(input_layer)
 
             # Clip layer2 to the selected region
+            self.log_debug("Clipping reference data...", show_in_bar=False)
             try:
                 reference_layer = self.clip_layer_with_processing(
                     reference_layer_full, region_layer, f"Clipped {layer2_name}"
                 )
+                create_spatial_index(reference_layer)
 
             except ClipError as e:
                 self.iface.messageBar().pushMessage(
@@ -372,6 +382,9 @@ class GeolinesQCPlugin:
                 )
 
         # Extract features of ref layer within distance
+        self.log_debug(
+            f"Selecting reference data within {buffer_distance}...", show_in_bar=False
+        )
         try:
             reference_layer = self.extract_within_distance_with_processing(
                 input_layer,
@@ -390,8 +403,10 @@ class GeolinesQCPlugin:
             )
         if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
             QgsProject.instance().addMapLayer(reference_layer)
+            create_spatial_index(reference_layer)
 
         # Create a new memory layer to store the segmented lines with intersection results
+        self.log_debug("Creating ouput memory layer...", show_in_bar=False)
         output_layer = QgsVectorLayer(
             "LineString?crs=" + input_layer.crs().authid(),
             f"{layer1_name} — {layer2_name} {buffer_distance}",
@@ -416,6 +431,7 @@ class GeolinesQCPlugin:
             "GeoLinesQC",
             level=Qgis.Info,
         )
+        self.log_debug("Starting analysis...", show_in_bar=False)
 
         # Initialize progress dialog
         progress = QProgressDialog(
