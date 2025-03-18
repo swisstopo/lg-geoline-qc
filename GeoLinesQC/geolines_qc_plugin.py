@@ -287,9 +287,12 @@ class GeolinesQCPlugin:
         return clipped_layer
 
     def analyze_layers(self):
-
         # Clear logs
-        QgsMessageLog.logMessage("---- Starting a new operation ----", "GeoLinesQC", level=Qgis.Info,)
+        QgsMessageLog.logMessage(
+            "---- Starting a new operation ----",
+            "GeoLinesQC",
+            level=Qgis.Info,
+        )
         # Get selected layers
         # TODO check validiy
 
@@ -326,7 +329,7 @@ class GeolinesQCPlugin:
         create_spatial_index(input_layer_full)
         create_spatial_index(reference_layer_full)
 
-        # Get the selected region layer
+        # First step: get the selected region layer
         """region_geometry = (
             self.get_selected_geometry()
         )  # Assuming this returns a QgsVectorLayer"""
@@ -367,9 +370,9 @@ class GeolinesQCPlugin:
                     level=Qgis.Critical,
                 )
                 QgsMessageLog.logMessage(
-                f"Unexpected error during clipping: {str(e)}",
-                "GeoLinesQC",
-                level=Qgis.Critical,
+                    f"Unexpected error during clipping: {str(e)}",
+                    "GeoLinesQC",
+                    level=Qgis.Critical,
                 )
 
             # TODO
@@ -397,7 +400,7 @@ class GeolinesQCPlugin:
                     level=Qgis.Critical,
                 )
 
-        # Extract features of ref layer within distance
+        # Second step: extract features of ref layer within distance
         self.log_debug(
             f"Selecting reference data within {buffer_distance}...", show_in_bar=False
         )
@@ -422,6 +425,32 @@ class GeolinesQCPlugin:
             QgsProject.instance().addMapLayer(reference_layer)
             create_spatial_index(reference_layer)
 
+        # Final step
+        self.segment_and_check_intersections(
+            input_layer, reference_layer, segment_length, buffer_distance
+        )
+
+    def segment_and_check_intersections(
+        self,
+        input_layer,
+        reference_layer,
+        segment_length: float,
+        buffer_distance: float,
+    ):
+        """
+        Segments features in the input layer, checks for intersections with the reference layer,
+        and creates an output memory layer with the results.
+
+        Parameters:
+        - input_layer: QgsVectorLayer
+            The input layer containing the features to segment.
+        - reference_layer: QgsVectorLayer
+            The layer against which intersections are checked.
+        - segment_length: float
+            The length of each segment to create from the input layer's features.
+        - buffer_distance: float
+            The buffer distance used to check for intersections.
+        """
         # Create a new memory layer to store the segmented lines with intersection results
         self.log_debug("Creating ouput memory layer...", show_in_bar=False)
         output_layer = QgsVectorLayer(
@@ -567,7 +596,7 @@ class GeolinesQCPlugin:
         # Construct the path to your plugin's logs directory
         log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
 
-       # log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        # log_dir = os.path.join(os.path.dirname(__file__), "logs")
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
 
