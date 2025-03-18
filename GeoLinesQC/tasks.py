@@ -1,12 +1,39 @@
-from qgis.core import (QgsTask, QgsApplication, QgsProcessingFeedback,
-                       QgsMessageLog, Qgis)
+from qgis.core import (
+    QgsTask,
+    QgsApplication,
+    QgsProcessingFeedback,
+    QgsMessageLog,
+    Qgis,
+)
 from qgis.PyQt.QtWidgets import QProgressDialog
 from qgis.PyQt.QtCore import Qt, pyqtSignal
-from qgis.core import QgsTask, QgsApplication, QgsProcessingFeedback, QgsMessageLog, Qgis, QgsProject
+from qgis.core import (
+    QgsTask,
+    QgsApplication,
+    QgsProcessingFeedback,
+    QgsMessageLog,
+    Qgis,
+    QgsProject,
+)
 from qgis.PyQt.QtWidgets import QProgressDialog
 from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.core import (
+    Qgis,
+    QgsFeature,
+    QgsField,
+    QgsGeometry,
+    QgsMessageLog,
+    QgsPoint,
+    QgsProcessingFeatureSourceDefinition,
+    QgsProject,
+    QgsSpatialIndex,
+    QgsVectorLayer,
+    QgsWkbTypes,
+)
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 
 from GeoLinesQC.errors import ClipError
+
 
 class ClipLayerTask(QgsTask):
     """Task for clipping a layer with a mask layer"""
@@ -36,7 +63,7 @@ class ClipLayerTask(QgsTask):
             clip_params = {
                 "INPUT": self.input_layer,
                 "OVERLAY": self.mask_layer,
-                "OUTPUT": f"memory:{self.output_name}"
+                "OUTPUT": f"memory:{self.output_name}",
             }
 
             # Run the clip algorithm
@@ -45,7 +72,9 @@ class ClipLayerTask(QgsTask):
 
             # Check if any features were clipped
             if self.output_layer.featureCount() == 0:
-                self.exception = ClipError(f"No features found in the clipped layer: {self.output_name}")
+                self.exception = ClipError(
+                    f"No features found in the clipped layer: {self.output_name}"
+                )
                 return False
 
             return True
@@ -56,14 +85,16 @@ class ClipLayerTask(QgsTask):
     def cancel(self):
         """Cancel the task"""
         if self.feedback:
-            self.feedback.setCanceled(True)
+            self.feedback.isCanceled(True)
         return super().cancel()
 
 
 class ExtractionTask(QgsTask):
     """Task for extracting features within a distance"""
 
-    def __init__(self, description, input_layer, reference_layer, distance, output_name):
+    def __init__(
+        self, description, input_layer, reference_layer, distance, output_name
+    ):
         super().__init__(description, QgsTask.CanCancel)
         self.input_layer = input_layer
         self.reference_layer = reference_layer
@@ -91,16 +122,22 @@ class ExtractionTask(QgsTask):
                 "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
                 "INTERSECT": self.reference_layer,
                 "DISTANCE": self.distance,
-                "OUTPUT": f"memory:{self.output_name}"
+                "OUTPUT": f"memory:{self.output_name}",
             }
 
             # Run the extraction algorithm
-            result = processing.run("native:extractbylocation", extract_within_params, feedback=self.feedback)
+            result = processing.run(
+                "native:extractbylocation",
+                extract_within_params,
+                feedback=self.feedback,
+            )
             self.output_layer = result["OUTPUT"]
 
             # Check if any features were extracted
             if self.output_layer.featureCount() == 0:
-                self.exception = ClipError(f"No features found within distance in layer: {self.output_name}")
+                self.exception = ClipError(
+                    f"No features found within distance in layer: {self.output_name}"
+                )
                 return False
 
             return True
@@ -108,27 +145,33 @@ class ExtractionTask(QgsTask):
             self.exception = e
             return False
 
+    # TODO: check
     def cancel(self):
         """Cancel the task"""
         if self.feedback:
-            self.feedback.setCanceled(True)
+            self.feedback.cancel()
+        QgsMessageLog.logMessage(
+            "ExtractionTask was cancelled".format(name=self.description()),
+            "GeoLinesQC",
+            Qgis.Info,
+        )
         return super().cancel()
 
     def finished(self, result):
         """Handle the task completion"""
         if self.exception:
             QgsMessageLog.logMessage(
-                f"Task failed: {str(self.exception)}", "GeoLinesQC",  level=Qgis.Critical
-
+                f"Task failed: {str(self.exception)}", "GeoLinesQC", level=Qgis.Critical
             )
-            self.finished.emit(False)
+
         else:
             QgsMessageLog.logMessage(
-            "ExtractionTask completed successfully.", "GeoLinesQC", level=Qgis.Success
+                "ExtractionTask completed successfully.",
+                "GeoLinesQC",
+                level=Qgis.Success,
             )
             # Optionally add the output layer to the map
             QgsProject.instance().addMapLayer(self.output_layer)
-
 
 
 '''class SegmentAndCheckTask(QgsTask):
@@ -203,10 +246,13 @@ class ExtractionTask(QgsTask):
         # This is just a placeholder - replace with your actual implementation
         return None'''
 
+
 class SegmentAndCheckTask(QgsTask):
     """Task for segmenting and checking intersections"""
 
-    def __init__(self, description, input_layer, reference_layer, segment_length, buffer_distance):
+    def __init__(
+        self, description, input_layer, reference_layer, segment_length, buffer_distance
+    ):
         super().__init__(description, QgsTask.CanCancel)
         self.input_layer = input_layer
         self.reference_layer = reference_layer
@@ -224,15 +270,19 @@ class SegmentAndCheckTask(QgsTask):
                 self.input_layer,
                 self.reference_layer,
                 self.segment_length,
-                self.buffer_distance
+                self.buffer_distance,
             )
             return True  # Task completed successfully
         except Exception as e:
             self.exception = e
-            QgsMessageLog.logMessage(f"Error in analysis task: {str(e)}", "GeoLinesQC", level=Qgis.Critical)
+            QgsMessageLog.logMessage(
+                f"Error in analysis task: {str(e)}", "GeoLinesQC", level=Qgis.Critical
+            )
             return False  # Task failed
 
-    def segment_and_check_intersections_bg(self, input_layer, reference_layer, segment_length, buffer_distance):
+    def segment_and_check_intersections_bg(
+        self, input_layer, reference_layer, segment_length, buffer_distance
+    ):
         """
         Background-friendly implementation of segment_and_check_intersections.
         Supports progress reporting and cancellation.
@@ -241,12 +291,16 @@ class SegmentAndCheckTask(QgsTask):
         output_layer = QgsVectorLayer(
             f"LineString?crs={input_layer.crs().authid()}",
             f"Segmented {input_layer.name()}",
-            "memory"
+            "memory",
         )
-        output_layer.dataProvider().addAttributes([
-            QgsField("id", QVariant.Int),
-            QgsField("intersects", QVariant.Bool)  # Field to store intersection results
-        ])
+        output_layer.dataProvider().addAttributes(
+            [
+                QgsField("id", QVariant.Int),
+                QgsField(
+                    "intersects", QVariant.Bool
+                ),  # Field to store intersection results
+            ]
+        )
         output_layer.updateFields()
 
         total_features = input_layer.featureCount()
@@ -263,7 +317,9 @@ class SegmentAndCheckTask(QgsTask):
             self.feedback.setProgress(progress)
 
             line_geometry = feature.geometry()
-            segments = self.segment_line(line_geometry, segment_length)  # Custom segmentation logic
+            segments = self.segment_line(
+                line_geometry, segment_length
+            )  # Custom segmentation logic
 
             # Process each segment
             for segment in segments:
@@ -272,7 +328,9 @@ class SegmentAndCheckTask(QgsTask):
                 new_feature.setGeometry(segment)
 
                 # Check for intersections with the reference layer
-                intersects = self.buffer_and_check_intersections(segment, reference_layer, buffer_distance)
+                intersects = self.buffer_and_check_intersections(
+                    segment, reference_layer, buffer_distance
+                )
                 new_feature.setAttribute("intersects", intersects)
 
                 # Add the feature to the memory layer
@@ -281,24 +339,27 @@ class SegmentAndCheckTask(QgsTask):
         QgsMessageLog.logMessage(
             f"Analysis complete. Total segments: {nb_segments}.",
             "GeoLinesQC",
-            level=Qgis.Info
+            level=Qgis.Info,
         )
         return output_layer  # Return the processed memory layer
 
     def cancel(self):
         """Cancel the task"""
-        self.feedback.setCanceled(True)
+        self.feedback.isCanceled(True)
         return super().cancel()
 
     def finished(self, result):
         """Handle the task completion"""
         if self.exception:
-            self.iface.messageBar().pushMessage(
-                "Error", f"Task failed: {str(self.exception)}", level=Qgis.Critical
+            QgsMessageLog.logMessage(
+                f"Task failed: {str(self.exception)}", "GeoLinesQC", level=Qgis.Critical
             )
+
         else:
-            self.iface.messageBar().pushMessage(
-                "Success", "Task completed successfully.", level=Qgis.Success
+            QgsMessageLog.logMessage(
+                "SegmentAndCheckTask completed successfully.",
+                "GeoLinesQC",
+                level=Qgis.Success,
             )
             # Optionally add the output layer to the map
             QgsProject.instance().addMapLayer(self.output_layer)

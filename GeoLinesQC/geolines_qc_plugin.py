@@ -506,9 +506,11 @@ class GeolinesQCPlugin:
                 )
 
         # Connect signals
-        #extract_task.taskCompleted.connect(on_extraction_complete)
+        # extract_task.taskCompleted.connect(on_extraction_complete)
         # TODO:
-        extract_task.taskCompleted.connect(lambda: self.on_extraction_complete(True))  # Always assume success
+        extract_task.taskCompleted.connect(
+            lambda: on_extraction_complete(True)
+        )  # Always assume success
         extract_task.taskTerminated.connect(
             lambda: self.handle_task_error("Extract features", extract_task.exception)
         )
@@ -569,7 +571,7 @@ class GeolinesQCPlugin:
 
                 # Show completion message
                 self.iface.messageBar().pushMessage(
-                    "Success", "Analysis complete", level=Qgis.Success
+                    "Success", "Final analysis complete", level=Qgis.Success
                 )
             else:
                 self.iface.messageBar().pushMessage(
@@ -581,10 +583,13 @@ class GeolinesQCPlugin:
         # Connect signals
         # final_task.taskCompleted.connect(on_final_complete)
         # TODO
-        final_task.taskCompleted.connect(lambda: self.on_final_complete(True))  # Always assume success
+        final_task.taskCompleted.connect(
+            lambda: on_final_complete(True)
+        )  # Always assume success
         final_task.taskTerminated.connect(
             lambda: self.handle_task_error("Final analysis", final_task.exception)
         )
+
         progress.canceled.connect(final_task.cancel)
 
         # Setup progress updates
