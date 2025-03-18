@@ -1,36 +1,25 @@
+import os
+from datetime import datetime
+
+
 from qgis.core import (
-    QgsTask,
+    Qgis,
     QgsApplication,
-    QgsProcessingFeedback,
-    QgsMessageLog,
-    Qgis,
-)
-from qgis.PyQt.QtWidgets import QProgressDialog
-from qgis.PyQt.QtCore import Qt, pyqtSignal
-from qgis.core import (
-    QgsTask,
-    QgsApplication,
-    QgsProcessingFeedback,
-    QgsMessageLog,
-    Qgis,
-    QgsProject,
-)
-from qgis.PyQt.QtWidgets import QProgressDialog
-from qgis.PyQt.QtCore import Qt, QTimer
-from qgis.core import (
-    Qgis,
     QgsFeature,
     QgsField,
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
     QgsProcessingFeatureSourceDefinition,
+    QgsProcessingFeedback,
     QgsProject,
     QgsSpatialIndex,
+    QgsTask,
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QTimer, QVariant, pyqtSignal
+from qgis.PyQt.QtWidgets import QProgressDialog
 
 from GeoLinesQC.errors import ClipError
 
@@ -280,6 +269,157 @@ class SegmentAndCheckTask(QgsTask):
             )
             return False  # Task failed
 
+    def segment_line(self, line, segment_length):
+        """
+        Splits a line into segments of equal length using QGIS native functions.
+        Handles both single LineString and MultiLineString geometries.
+
+        Args:
+            line (QgsGeometry): The input line geometry (can be LineString or MultiLineString).
+            segment_length (float): The desired length of each segment.
+        Returns:
+            list: A list of QgsGeometry objects representing the segments.
+        """
+        try:
+            new_segments = []
+
+            # Check geometry type
+            geom_type = line.wkbType()
+            # self.log_debug(
+            #    f"Processing geometry type: {QgsWkbTypes.displayString(geom_type)}"
+            # )
+
+            # Handle MultiLineString
+            if QgsWkbTypes.isMultiType(geom_type):
+                # self.log_debug("Processing MultiLineString geometry")
+                for part in line.asGeometryCollection():
+                    # self.log_debug(f"Processing part with length: {part.length()}")
+                    segments = self.segment_single_line(part, segment_length)
+                    new_segments.extend(segments)
+            # Handle single LineString
+            else:
+                # self.log_debug("Processing single LineString geometry")
+                new_segments = self.segment_single_line(line, segment_length)
+
+            summary = f"\nTotal segments created: {len(new_segments)}"
+            for idx, seg in enumerate(new_segments):
+                summary += f"\nSegment {idx} length: {seg.length()}"
+            # self.log_debug(summary)
+
+            return new_segments
+
+        except Exception as e:
+            import traceback
+
+            error_msg = f"Error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+            self.log_debug(error_msg, show_in_bar=True)
+            return [line]
+
+    def segment_single_line(self, line, segment_length):
+        """
+        Splits a single LineString geometry into segments.
+
+        Args:
+            line (QgsGeometry): The input LineString geometry.
+            segment_length (float): The desired length of each segment.
+        Returns:
+            list: A list of QgsGeometry objects representing the segments.
+        """
+        try:
+            # Debug: Log input parameters
+            # self.log_debug(f"Input line length: {line.length()}")
+            # self.log_debug(f"Requested segment length: {segment_length}")
+
+            # Extract vertices from the line
+            vertices = line.asPolyline()
+            # self.log_debug(f"Number of vertices in input line: {len(vertices)}")
+
+            if len(vertices) < 2:
+                # msg = "Invalid line: Not enough vertices."
+                # self.log_debug(msg, show_in_bar=True)
+                return [line]
+
+            new_segments = []
+            current_segment = [QgsPoint(vertices[0])]
+            accumulated_length = 0.0
+
+            for i in range(1, len(vertices)):
+                prev_point = QgsPoint(vertices[i - 1])
+                current_point = QgsPoint(vertices[i])
+                segment = QgsGeometry.fromPolyline([prev_point, current_point])
+                segment_length_current = segment.length()
+
+                # self.log_debug(f"Processing vertex {i}:")
+                # self.log_debug(f"Current segment length: {segment_length_current}")
+                # self.log_debug(
+                #     f"Accumulated length before processing: {accumulated_length}"
+                # )
+
+                while accumulated_length + segment_length_current >= segment_length:
+                    remaining_length = segment_length - accumulated_length
+                    # self.log_debug(
+                    #    f"Splitting segment - Remaining length: {remaining_length}"
+                    # )
+
+                    if remaining_length <= 0:
+                        # self.log_debug(
+                        #    "Warning: Remaining length is zero or negative",
+                        #    show_in_bar=True,
+                        # )
+                        break
+
+                    if remaining_length >= segment_length_current:
+                        # self.log_debug(
+                        #    "Warning: Remaining length exceeds current segment length",
+                        #    show_in_bar=True,
+                        # )
+                        break
+
+                    cut_point = segment.interpolate(remaining_length).asPoint()
+                    # self.log_debug(
+                    #    f"Cut point created at: ({cut_point.x()}, {cut_point.y()})"
+                    # )
+
+                    current_segment.append(QgsPoint(cut_point))
+                    new_segment = QgsGeometry.fromPolyline(current_segment)
+                    # self.log_debug(f"New segment length: {new_segment.length()}")
+                    new_segments.append(new_segment)
+
+                    current_segment = [QgsPoint(cut_point)]
+                    accumulated_length = 0.0
+
+                    segment = QgsGeometry.fromPolyline(
+                        [QgsPoint(cut_point), current_point]
+                    )
+                    segment_length_current = segment.length()
+                    # self.log_debug(
+                    #    f"Remaining segment length after cut: {segment_length_current}"
+                    # )
+
+                current_segment.append(current_point)
+                accumulated_length += segment_length_current
+                # self.log_debug(
+                #    f"Accumulated length after processing: {accumulated_length}"
+                # )
+
+            # Add the last segment if it has more than one point
+            if len(current_segment) > 1:
+                final_segment = QgsGeometry.fromPolyline(current_segment)
+                # self.log_debug(
+                #    f"Adding final segment with length: {final_segment.length()}"
+                # )
+                new_segments.append(final_segment)
+
+            return new_segments
+
+        except Exception as e:
+            import traceback
+
+            error_msg = f"Error in segment_single_line: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+            # self.log_debug(error_msg, show_in_bar=True)
+            QgsMessageLog.logMessage(error_msg, "GeoLinesQC", level=Qgis.Error)
+            return [line]
+
     def segment_and_check_intersections_bg(
         self, input_layer, reference_layer, segment_length, buffer_distance
     ):
@@ -287,6 +427,8 @@ class SegmentAndCheckTask(QgsTask):
         Background-friendly implementation of segment_and_check_intersections.
         Supports progress reporting and cancellation.
         """
+
+        self.log_debug("Starting background segment and check")
         # Create a new memory layer to store the results
         output_layer = QgsVectorLayer(
             f"LineString?crs={input_layer.crs().authid()}",
@@ -306,6 +448,8 @@ class SegmentAndCheckTask(QgsTask):
         total_features = input_layer.featureCount()
         nb_segments = 0  # Counter for segments added
 
+        self.log_debug(f"Total features: {total_features}")
+
         # Iterate through features in the input layer
         for i, feature in enumerate(input_layer.getFeatures()):
             # Check if the task has been cancelled
@@ -320,7 +464,9 @@ class SegmentAndCheckTask(QgsTask):
             segments = self.segment_line(
                 line_geometry, segment_length
             )  # Custom segmentation logic
-
+            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress}%"
+            self.log_debug(msg)
+            QgsMessageLog.logMessage(msg, "GeoLinesQC", level=Qgis.Info)
             # Process each segment
             for segment in segments:
                 nb_segments += 1
@@ -343,9 +489,76 @@ class SegmentAndCheckTask(QgsTask):
         )
         return output_layer  # Return the processed memory layer
 
+    def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
+        """
+        Buffers a segment and checks if it intersects with any features in a reference layer.
+
+        Args:
+            segment (QgsGeometry): The segment to buffer.
+            reference_layer (QgsVectorLayer): The reference layer to check for intersections.
+            buffer_distance (float): The buffer distance.
+
+        Returns:
+            bool: True if the buffer intersects any features in the reference layer, False otherwise.
+        """
+
+        try:
+            # Create a buffer around the segment
+            segment_buffer = segment.buffer(
+                buffer_distance, 5
+            )  # 5 is the number of segments to approximate the buffer
+
+            # Create a spatial index for the reference layer
+            spatial_index = QgsSpatialIndex(reference_layer.getFeatures())
+
+            # Find features in the reference layer that intersect with the buffer's bounding box
+            candidate_ids = spatial_index.intersects(segment_buffer.boundingBox())
+
+            # Check for actual intersections with the candidate features
+            for feature_id in candidate_ids:
+                feature = reference_layer.getFeature(feature_id)
+                reference_geometry = feature.geometry()
+                if segment_buffer.intersects(reference_geometry):
+                    return True  # Intersection found
+
+            return False  # No intersection found
+
+        except Exception as e:
+            self.log_debug(f"Error in buffer and check: {e}")
+            QgsMessageLog.logMessage(
+                f"Error in buffer_and_check_intersections: {e}.",
+                "GeoLinesQC",
+                level=Qgis.Critical,
+            )
+            return False
+
+    def log_debug(self, message):
+        """Unified logging function that writes to both log file and QGIS log"""
+        # Log to QGIS Message Log
+        QgsMessageLog.logMessage(message, "GeoLinesQC", level=Qgis.Info)
+
+        # Log to file
+
+        # Get the path to the QGIS user profile directory
+        profile_path = QgsApplication.qgisSettingsDirPath()
+
+        # Construct the path to your plugin's logs directory
+        log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
+
+        # log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        log_file = os.path.join(log_dir, "debug.log")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with open(log_file, "a") as f:
+            f.write(f"{timestamp}: {message}\n")
+
     def cancel(self):
         """Cancel the task"""
-        self.feedback.isCanceled(True)
+        # TODO
+        self.feedback.isCanceled()
         return super().cancel()
 
     def finished(self, result):

@@ -568,6 +568,10 @@ class GeolinesQCPlugin:
                 # Add result to map
                 if result_layer:
                     QgsProject.instance().addMapLayer(result_layer)
+                    # Load style and add to map
+                    self.add_styled_layer(result_layer, "intersects")
+                    # close dialog
+                    self.dialog.close()
 
                 # Show completion message
                 self.iface.messageBar().pushMessage(
@@ -596,12 +600,13 @@ class GeolinesQCPlugin:
         timer = QTimer(self.iface.mainWindow())
 
         def update_progress():
-            if final_task.feedback:
-                progress.setValue(int(final_task.feedback.progress()))
-                if final_task.feedback.isCanceled() or not final_task.isActive():
-                    timer.stop()
+            if not final_task or final_task.isCanceled():
+                if final_task.feedback:
+                    # progress.setValue(int(final_task.feedback.progress()))
+                    if final_task.feedback.isCanceled() or not final_task.isActive():
+                        timer.stop()
 
-        timer.timeout.connect(update_progress)
+        # timer.timeout.connect(update_progress)
         timer.start(100)
 
         # Start task
@@ -795,6 +800,7 @@ class GeolinesQCPlugin:
         with open(log_file, "a") as f:
             f.write(f"{timestamp}: {message}\n")
 
+    # TODO: moved to task
     def segment_line(self, line, segment_length):
         """
         Splits a line into segments of equal length using QGIS native functions.
@@ -841,6 +847,7 @@ class GeolinesQCPlugin:
             self.log_debug(error_msg, show_in_bar=True)
             return [line]
 
+    # TODO: moved to task
     def segment_single_line(self, line, segment_length):
         """
         Splits a single LineString geometry into segments.
@@ -945,7 +952,8 @@ class GeolinesQCPlugin:
             self.log_debug(error_msg, show_in_bar=True)
             return [line]
 
-    def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
+    # TODO: moved to task
+    '''def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
         """
         Buffers a segment and checks if it intersects with any features in a reference layer.
 
@@ -985,4 +993,4 @@ class GeolinesQCPlugin:
         except Exception as e:
             print(f"Error: {e}")
             self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
-            return False
+            return False'''
