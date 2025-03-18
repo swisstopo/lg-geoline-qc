@@ -602,6 +602,7 @@ class GeolinesQCPlugin:
         def update_progress():
             if not final_task or final_task.isCanceled():
                 if final_task.feedback:
+                    # TODO reactivate
                     # progress.setValue(int(final_task.feedback.progress()))
                     if final_task.feedback.isCanceled() or not final_task.isActive():
                         timer.stop()
@@ -624,7 +625,7 @@ class GeolinesQCPlugin:
         )
 
     # TODO: remove
-    def segment_and_check_intersections(
+    '''def segment_and_check_intersections(
         self,
         input_layer,
         reference_layer,
@@ -728,11 +729,7 @@ class GeolinesQCPlugin:
 
                 output_layer.dataProvider().addFeature(new_feature)
 
-        """self.iface.messageBar().pushMessage(
-            "Info",
-            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
-            level=Qgis.Info,
-        )"""
+  
         # Close the progress dialog
         progress.setValue(input_layer.featureCount())
         self.iface.messageBar().pushMessage(
@@ -743,7 +740,7 @@ class GeolinesQCPlugin:
         # Load style and add to map
         self.add_styled_layer(output_layer, "intersects")
 
-        self.dialog.close()
+        self.dialog.close()'''
 
     def add_styled_layer(self, layer, style_name):
         """
@@ -801,7 +798,7 @@ class GeolinesQCPlugin:
             f.write(f"{timestamp}: {message}\n")
 
     # TODO: moved to task
-    def segment_line(self, line, segment_length):
+    '''def segment_line(self, line, segment_length):
         """
         Splits a line into segments of equal length using QGIS native functions.
         Handles both single LineString and MultiLineString geometries.
@@ -845,10 +842,10 @@ class GeolinesQCPlugin:
 
             error_msg = f"Error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
             self.log_debug(error_msg, show_in_bar=True)
-            return [line]
+            return [line]'''
 
     # TODO: moved to task
-    def segment_single_line(self, line, segment_length):
+    '''def segment_single_line(self, line, segment_length):
         """
         Splits a single LineString geometry into segments.
 
@@ -950,7 +947,7 @@ class GeolinesQCPlugin:
 
             error_msg = f"Error in segment_single_line: {str(e)}\nTraceback:\n{traceback.format_exc()}"
             self.log_debug(error_msg, show_in_bar=True)
-            return [line]
+            return [line]'''
 
     # TODO: moved to task
     '''def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):

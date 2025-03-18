@@ -464,7 +464,7 @@ class SegmentAndCheckTask(QgsTask):
             segments = self.segment_line(
                 line_geometry, segment_length
             )  # Custom segmentation logic
-            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress}%"
+            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress}%]"
             self.log_debug(msg)
             QgsMessageLog.logMessage(msg, "GeoLinesQC", level=Qgis.Info)
             # Process each segment
