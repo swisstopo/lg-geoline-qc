@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
 
-
 from qgis.core import (
     Qgis,
     QgsApplication,
@@ -10,7 +9,6 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
-
     QgsProcessingFeedback,
     QgsProject,
     QgsSpatialIndex,
@@ -18,8 +16,7 @@ from qgis.core import (
     QgsVectorLayer,
     QgsWkbTypes,
 )
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QTimer, QVariant, pyqtSignal
-from qgis.PyQt.QtWidgets import QProgressDialog
+from qgis.PyQt.QtCore import QVariant
 
 from GeoLinesQC.errors import ClipError
 

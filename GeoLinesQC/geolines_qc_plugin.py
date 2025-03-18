@@ -9,19 +9,15 @@ from qgis.core import (
     Qgis,
     QgsApplication,
     QgsMessageLog,
-
     QgsProcessingFeatureSourceDefinition,
-
     QgsProject,
-
-      QgsVectorLayer,
-
+    QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
-
+    QApplication,
     QComboBox,
     QDialog,
     QLabel,
