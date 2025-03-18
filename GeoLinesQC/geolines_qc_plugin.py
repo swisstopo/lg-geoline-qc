@@ -18,6 +18,7 @@ from qgis.core import (
     QgsVectorLayer,
     QgsWkbTypes,
 )
+from qgis.core import QgsApplication
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
@@ -352,6 +353,9 @@ class GeolinesQCPlugin:
         return clipped_layer
 
     def analyze_layers(self):
+
+        # Clear logs
+        QgsMessageLog.logMessage("---- Starting a new operation ----", "GeoLinesQC", level=Qgis.Info,)
         # Get selected layers
         # TODO check validiy
 
@@ -373,6 +377,11 @@ class GeolinesQCPlugin:
         self.iface.messageBar().pushMessage(
             "Info",
             "Loading data...",
+            level=Qgis.Info,
+        )
+        QgsMessageLog.logMessage(
+            "Loading data...",
+            "GeoLinesQC",
             level=Qgis.Info,
         )
         self.log_debug("Loading data...", show_in_bar=False)
@@ -403,6 +412,7 @@ class GeolinesQCPlugin:
                 level=Qgis.Info,
             )
             self.log_debug("Clipping data...", show_in_bar=False)
+
             # Convert the region geometry to a vector layer
             # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
             region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
@@ -422,6 +432,11 @@ class GeolinesQCPlugin:
                     f"Unexpected error during clipping: {str(e)}",
                     level=Qgis.Critical,
                 )
+                QgsMessageLog.logMessage(
+                f"Unexpected error during clipping: {str(e)}",
+                "GeoLinesQC",
+                level=Qgis.Critical,
+                )
 
             # TODO
             if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
@@ -431,8 +446,9 @@ class GeolinesQCPlugin:
             # Clip layer2 to the selected region
             self.log_debug("Clipping reference data...", show_in_bar=False)
             try:
+                layer2_name = f"{layer2_name} clipped"
                 reference_layer = self.clip_layer_with_processing(
-                    reference_layer_full, region_layer, f"Clipped {layer2_name}"
+                    reference_layer_full, region_layer, layer2_name
                 )
                 create_spatial_index(reference_layer)
 
@@ -452,12 +468,13 @@ class GeolinesQCPlugin:
             f"Selecting reference data within {buffer_distance}...", show_in_bar=False
         )
         try:
+            layer2_name = f"{layer2_name} extracted"
             reference_layer = self.extract_within_distance_with_processing(
 
                 input_layer,
                 reference_layer,
                 buffer_distance * 1.05,
-                f"Clipped {layer2_name}",
+                layer2_name,
             )
 
         except ClipError as e:
@@ -610,11 +627,18 @@ class GeolinesQCPlugin:
             self.iface.messageBar().pushMessage("Debug", message, level=Qgis.Info)
 
         # Log to file
-        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+
+        # Get the path to the QGIS user profile directory
+        profile_path = QgsApplication.qgisSettingsDirPath()
+
+        # Construct the path to your plugin's logs directory
+        log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
+
+       # log_dir = os.path.join(os.path.dirname(__file__), "logs")
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
 
-        log_file = os.path.join(log_dir, "GeoLinesQC_debug.log")
+        log_file = os.path.join(log_dir, "debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with open(log_file, "a") as f:

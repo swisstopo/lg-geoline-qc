@@ -14,6 +14,9 @@ you just donwloaded.
 You can find the plugins directory by going to `Settings -> System -> Plugins`.
 
 
+C:\Users\U80795753\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins
+
+
 ## Usage
 
 Open the Plugin from the Menu bar
