@@ -32,8 +32,20 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+from qgis.core import (
+    QgsTask,
+    QgsApplication,
+    QgsProcessingFeedback,
+    QgsMessageLog,
+    Qgis,
+    QgsProject,
+)
+from qgis.PyQt.QtWidgets import QProgressDialog
+from qgis.PyQt.QtCore import Qt, QTimer
 
 from GeoLinesQC.utils import create_spatial_index
+from GeoLinesQC.tasks import SegmentAndCheckTask, ExtractionTask, ClipLayerTask
+from GeoLinesQC.errors import ClipError
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
@@ -48,12 +60,6 @@ if hasattr(QApplication, "setAttribute"):
 
 # Set the environment variable for auto screen scaling
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-
-
-class ClipError(Exception):
-    """Custom exception for clipping operations"""
-
-    pass
 
 
 class GeolinesQCPlugin:
@@ -287,149 +293,327 @@ class GeolinesQCPlugin:
         return clipped_layer
 
     def analyze_layers(self):
+        """Main analysis function that chains processing steps together using background tasks"""
         # Clear logs
         QgsMessageLog.logMessage(
-            "---- Starting a new operation ----",
-            "GeoLinesQC",
-            level=Qgis.Info,
+            "---- Starting a new operation ----", "GeoLinesQC", level=Qgis.Info
         )
-        # Get selected layers
-        # TODO check validiy
 
+        # Get selected layers
         layer1_name = self.layer1_combo.currentText()
         layer2_name = self.layer2_combo.currentText()
         mask_layer_name = self.geometry_combo.currentText()
+
+        # Get parameters
         buffer_distance = (
             float(self.threshold_input.text())
             if self.threshold_input.text()
             else DEFAULT_BUFFER
         )
-
         segment_length = (
             float(self.segment_length_input.text())
             if self.segment_length_input.text()
             else DEFAULT_SEGMENT_LENGTH
         )
 
-        self.iface.messageBar().pushMessage(
-            "Info",
-            "Loading data...",
-            level=Qgis.Info,
-        )
-        QgsMessageLog.logMessage(
-            "Loading data...",
-            "GeoLinesQC",
-            level=Qgis.Info,
-        )
+        # Show initial message
+        self.iface.messageBar().pushMessage("Info", "Loading data...", level=Qgis.Info)
+        QgsMessageLog.logMessage("Loading data...", "GeoLinesQC", level=Qgis.Info)
         self.log_debug("Loading data...", show_in_bar=False)
 
+        # Get layer objects
         input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
         reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
-        # Create Spatial Indices
+
+        # Create spatial indices
         create_spatial_index(input_layer_full)
         create_spatial_index(reference_layer_full)
 
-        # First step: get the selected region layer
-        """region_geometry = (
-            self.get_selected_geometry()
-        )  # Assuming this returns a QgsVectorLayer"""
-
+        # Check if mask layer is selected
         if mask_layer_name == "None":
             self.iface.messageBar().pushMessage(
-                "Info",
-                "No region selected. Using the full dataset",
-                level=Qgis.Info,
+                "Info", "No region selected. Using the full dataset", level=Qgis.Info
             )
-            input_layer = input_layer_full
-            reference_layer = reference_layer_full
+            # Skip clipping and go directly to extraction
+            self.start_extraction_step(
+                input_layer_full, reference_layer_full, buffer_distance, segment_length
+            )
         else:
+            # Get mask layer
+            region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
             self.iface.messageBar().pushMessage(
-                "Info",
-                "Clipping data...",
-                level=Qgis.Info,
+                "Info", "Clipping data...", level=Qgis.Info
             )
             self.log_debug("Clipping data...", show_in_bar=False)
 
-            # Convert the region geometry to a vector layer
-            # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
-            region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
-            # Clip layer1 to the selected region
-            try:
-                input_layer = self.clip_layer_with_processing(
-                    input_layer_full, region_layer, f"Clipped {layer1_name}"
-                )
+            # Start the clipping process
+            self.start_clipping_step(
+                input_layer_full,
+                reference_layer_full,
+                region_layer,
+                layer1_name,
+                layer2_name,
+                buffer_distance,
+                segment_length,
+            )
 
-            except ClipError as e:
-                self.iface.messageBar().pushMessage(
-                    "Error", str(e), level=Qgis.Critical
-                )
-            except Exception as e:
-                self.iface.messageBar().pushMessage(
-                    "Error",
-                    f"Unexpected error during clipping: {str(e)}",
-                    level=Qgis.Critical,
-                )
+    def start_clipping_step(
+        self,
+        input_layer_full,
+        reference_layer_full,
+        region_layer,
+        layer1_name,
+        layer2_name,
+        buffer_distance,
+        segment_length,
+    ):
+        """Start the clipping process in the background"""
+        # Create task for clipping input layer
+        clip_task1 = ClipLayerTask(
+            "Clip input layer", input_layer_full, region_layer, f"Clipped {layer1_name}"
+        )
+
+        # Function to handle completion of first clip task
+        def on_clip1_complete(success):
+            if success:
+                input_layer = clip_task1.output_layer
                 QgsMessageLog.logMessage(
-                    f"Unexpected error during clipping: {str(e)}",
+                    f"Input layer clipped successfully, features: {input_layer.featureCount()}",
                     "GeoLinesQC",
-                    level=Qgis.Critical,
                 )
 
-            # TODO
-            if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
-                QgsProject.instance().addMapLayer(input_layer)
-                create_spatial_index(input_layer)
+                # Add to map if configured
+                if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
+                    QgsProject.instance().addMapLayer(input_layer)
+                    create_spatial_index(input_layer)
 
-            # Clip layer2 to the selected region
-            self.log_debug("Clipping reference data...", show_in_bar=False)
-            try:
-                layer2_name = f"{layer2_name} clipped"
-                reference_layer = self.clip_layer_with_processing(
-                    reference_layer_full, region_layer, layer2_name
+                # Start clipping reference layer
+                self.log_debug("Clipping reference data...", show_in_bar=False)
+                clip_task2 = ClipLayerTask(
+                    "Clip reference layer",
+                    reference_layer_full,
+                    region_layer,
+                    f"{layer2_name} clipped",
                 )
-                create_spatial_index(reference_layer)
 
-            except ClipError as e:
-                self.iface.messageBar().pushMessage(
-                    "Error", str(e), level=Qgis.Critical
+                # Function to handle completion of second clip task
+                def on_clip2_complete(success):
+                    if success:
+                        reference_layer = clip_task2.output_layer
+                        QgsMessageLog.logMessage(
+                            f"Reference layer clipped successfully, features: {reference_layer.featureCount()}",
+                            "GeoLinesQC",
+                        )
+
+                        # Add to map if configured
+                        if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
+                            QgsProject.instance().addMapLayer(reference_layer)
+                            create_spatial_index(reference_layer)
+
+                        # Start extraction step
+                        self.start_extraction_step(
+                            input_layer,
+                            reference_layer,
+                            buffer_distance,
+                            segment_length,
+                        )
+                    else:
+                        self.iface.messageBar().pushMessage(
+                            "Error",
+                            f"Failed to clip reference layer: {clip_task2.exception}",
+                            level=Qgis.Critical,
+                        )
+
+                # Connect signals and start second clip task
+                clip_task2.taskCompleted.connect(on_clip2_complete)
+                clip_task2.taskTerminated.connect(
+                    lambda: self.handle_task_error(
+                        "Clip reference layer", clip_task2.exception
+                    )
                 )
-            except Exception as e:
+                QgsApplication.taskManager().addTask(clip_task2)
+            else:
                 self.iface.messageBar().pushMessage(
                     "Error",
-                    f"Unexpected error during clipping: {str(e)}",
+                    f"Failed to clip input layer: {clip_task1.exception}",
                     level=Qgis.Critical,
                 )
 
-        # Second step: extract features of ref layer within distance
+        # Connect signals and start first clip task
+        clip_task1.taskCompleted.connect(on_clip1_complete)
+        clip_task1.taskTerminated.connect(
+            lambda: self.handle_task_error("Clip input layer", clip_task1.exception)
+        )
+        QgsApplication.taskManager().addTask(clip_task1)
+
+    def start_extraction_step(
+        self, input_layer, reference_layer, buffer_distance, segment_length
+    ):
+        """Start the extraction process in the background"""
         self.log_debug(
             f"Selecting reference data within {buffer_distance}...", show_in_bar=False
         )
-        try:
-            layer2_name = f"{layer2_name} extracted"
-            reference_layer = self.extract_within_distance_with_processing(
-                input_layer,
-                reference_layer,
-                buffer_distance * 1.05,
-                layer2_name,
-            )
 
-        except ClipError as e:
-            self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
-        except Exception as e:
-            self.iface.messageBar().pushMessage(
-                "Error",
-                f"Unexpected error during extracting from distance: {str(e)}",
-                level=Qgis.Critical,
-            )
-        if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
-            QgsProject.instance().addMapLayer(reference_layer)
-            create_spatial_index(reference_layer)
+        # Create progress dialog
+        progress = QProgressDialog(
+            "Extracting features within distance...",
+            "Cancel",
+            0,
+            100,
+            self.iface.mainWindow(),
+        )
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
 
-        # Final step
-        self.segment_and_check_intersections(
-            input_layer, reference_layer, segment_length, buffer_distance
+        # Create extraction task
+        extract_task = ExtractionTask(
+            "Extract features within distance",
+            reference_layer,
+            input_layer,
+            buffer_distance * 1.05,
+            f"{reference_layer.name()} extracted",
         )
 
+        # Function to handle completion of extraction task
+        def on_extraction_complete(success):
+            progress.close()
+
+            if success:
+                reference_layer_extracted = extract_task.output_layer
+                QgsMessageLog.logMessage(
+                    f"Reference layer extracted successfully, features: {reference_layer_extracted.featureCount()}",
+                    "GeoLinesQC",
+                )
+
+                # Add to map if configured
+                if ADD_CLIPPED_LAYER_TO_MAP and reference_layer_extracted:
+                    QgsProject.instance().addMapLayer(reference_layer_extracted)
+                    create_spatial_index(reference_layer_extracted)
+
+                # Start final step
+                self.start_final_step(
+                    input_layer,
+                    reference_layer_extracted,
+                    segment_length,
+                    buffer_distance,
+                )
+            else:
+                self.iface.messageBar().pushMessage(
+                    "Error",
+                    f"Failed to extract reference features: {extract_task.exception}",
+                    level=Qgis.Critical,
+                )
+
+        # Connect signals
+        #extract_task.taskCompleted.connect(on_extraction_complete)
+        # TODO:
+        extract_task.taskCompleted.connect(lambda: self.on_extraction_complete(True))  # Always assume success
+        extract_task.taskTerminated.connect(
+            lambda: self.handle_task_error("Extract features", extract_task.exception)
+        )
+        progress.canceled.connect(extract_task.cancel)
+
+        # Setup progress updates
+        timer = QTimer(self.iface.mainWindow())
+
+        def update_progress():
+            if extract_task.feedback:
+                progress.setValue(int(extract_task.feedback.progress()))
+                if extract_task.feedback.isCanceled() or not extract_task.isActive():
+                    timer.stop()
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+        # Start task
+        QgsApplication.taskManager().addTask(extract_task)
+        progress.show()
+
+    def start_final_step(
+        self, input_layer, reference_layer, segment_length, buffer_distance
+    ):
+        """Start the final analysis step in the background"""
+        self.iface.messageBar().pushMessage(
+            "Info", "Performing final analysis...", level=Qgis.Info
+        )
+
+        # Create final analysis task
+        final_task = SegmentAndCheckTask(
+            "Segment and check intersections",
+            input_layer,
+            reference_layer,
+            segment_length,
+            buffer_distance,
+        )
+
+        # Progress dialog
+        progress = QProgressDialog(
+            "Analyzing intersections...", "Cancel", 0, 100, self.iface.mainWindow()
+        )
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        # Function to handle completion
+        def on_final_complete(success):
+            progress.close()
+
+            if success:
+                result_layer = final_task.output_layer
+                QgsMessageLog.logMessage("Final analysis complete", "GeoLinesQC")
+
+                # Add result to map
+                if result_layer:
+                    QgsProject.instance().addMapLayer(result_layer)
+
+                # Show completion message
+                self.iface.messageBar().pushMessage(
+                    "Success", "Analysis complete", level=Qgis.Success
+                )
+            else:
+                self.iface.messageBar().pushMessage(
+                    "Error",
+                    f"Final analysis failed: {final_task.exception}",
+                    level=Qgis.Critical,
+                )
+
+        # Connect signals
+        # final_task.taskCompleted.connect(on_final_complete)
+        # TODO
+        final_task.taskCompleted.connect(lambda: self.on_final_complete(True))  # Always assume success
+        final_task.taskTerminated.connect(
+            lambda: self.handle_task_error("Final analysis", final_task.exception)
+        )
+        progress.canceled.connect(final_task.cancel)
+
+        # Setup progress updates
+        timer = QTimer(self.iface.mainWindow())
+
+        def update_progress():
+            if final_task.feedback:
+                progress.setValue(int(final_task.feedback.progress()))
+                if final_task.feedback.isCanceled() or not final_task.isActive():
+                    timer.stop()
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+        # Start task
+        QgsApplication.taskManager().addTask(final_task)
+        progress.show()
+
+    def handle_task_error(self, task_name, exception):
+        """Handle errors from tasks"""
+        error_msg = str(exception) if exception else "Unknown error"
+        QgsMessageLog.logMessage(
+            f"Error in {task_name}: {error_msg}", "GeoLinesQC", level=Qgis.Critical
+        )
+        self.iface.messageBar().pushMessage(
+            "Error", f"{task_name} failed: {error_msg}", level=Qgis.Critical
+        )
+
+    # TODO: remove
     def segment_and_check_intersections(
         self,
         input_layer,
