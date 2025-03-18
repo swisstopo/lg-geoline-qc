@@ -7,23 +7,21 @@ from datetime import datetime
 from qgis import processing
 from qgis.core import (
     Qgis,
-    QgsFeature,
-    QgsField,
-    QgsGeometry,
+    QgsApplication,
     QgsMessageLog,
-    QgsPoint,
+
     QgsProcessingFeatureSourceDefinition,
+
     QgsProject,
-    QgsSpatialIndex,
-    QgsVectorLayer,
-    QgsWkbTypes,
+
+      QgsVectorLayer,
+
 )
-from qgis.core import QgsApplication
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAction,
-    QApplication,
+
     QComboBox,
     QDialog,
     QLabel,
@@ -32,20 +30,10 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
-from qgis.core import (
-    QgsTask,
-    QgsApplication,
-    QgsProcessingFeedback,
-    QgsMessageLog,
-    Qgis,
-    QgsProject,
-)
-from qgis.PyQt.QtWidgets import QProgressDialog
-from qgis.PyQt.QtCore import Qt, QTimer
 
-from GeoLinesQC.utils import create_spatial_index
-from GeoLinesQC.tasks import SegmentAndCheckTask, ExtractionTask, ClipLayerTask
 from GeoLinesQC.errors import ClipError
+from GeoLinesQC.tasks import ClipLayerTask, ExtractionTask, SegmentAndCheckTask
+from GeoLinesQC.utils import create_spatial_index
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0

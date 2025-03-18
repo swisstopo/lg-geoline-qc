@@ -10,7 +10,7 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
-    QgsProcessingFeatureSourceDefinition,
+
     QgsProcessingFeedback,
     QgsProject,
     QgsSpatialIndex,
@@ -140,7 +140,7 @@ class ExtractionTask(QgsTask):
         if self.feedback:
             self.feedback.cancel()
         QgsMessageLog.logMessage(
-            "ExtractionTask was cancelled".format(name=self.description()),
+            "ExtractionTask was cancelled: {self.description()}",
             "GeoLinesQC",
             Qgis.Info,
         )

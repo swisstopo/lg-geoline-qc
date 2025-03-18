@@ -3,8 +3,7 @@ from qgis.core import (
     QgsFeature,
     QgsMessageLog,
     QgsProject,
-    QgsSpatialIndex,
-    QgsVectorLayer,
+     QgsVectorLayer,
 )
 
 
