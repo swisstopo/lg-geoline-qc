@@ -12,17 +12,18 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
+    QgsProcessingFeatureSourceDefinition,
     QgsProject,
     QgsSpatialIndex,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsProcessingFeatureSourceDefinition,
 )
+from qgis.core import QgsApplication
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
-    QApplication,
     QAction,
+    QApplication,
     QComboBox,
     QDialog,
     QLabel,
@@ -32,16 +33,16 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
-
+from GeoLinesQC.utils import create_spatial_index
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
 
-ADD_CLIPPED_LAYER_TO_MAP = False
+ADD_CLIPPED_LAYER_TO_MAP = True
 DIALOG_WIDTH = 400
 
 # Enable high DPI scaling
-if hasattr(QApplication, 'setAttribute'):
+if hasattr(QApplication, "setAttribute"):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
@@ -198,6 +199,106 @@ class GeolinesQCPlugin:
         self.dialog.setLayout(layout)
         self.dialog.exec_()
 
+    def extract_within_distance_with_processing_ori(
+        self, layer_to_check, ref_layer, distance, layer_name
+    ):
+        # Create the processing parameters
+        # We want to filter out features of the reference layer which are too far from the layer to check (inverted logic)
+        extract_within_params = {
+            "INPUT": ref_layer,  # Layer to extract features from
+            "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
+            "INTERSECT": layer_to_check,  # Reference layer for distance comparison
+            "DISTANCE": distance,  # The distance threshold (in layer's CRS units)
+            "OUTPUT": "memory:" + layer_name,  # Output layer (temporary)
+        }
+
+        # Run the clip processing algorithm
+        result = processing.run("native:extractbylocation", extract_within_params)
+
+        # Get the output layer
+        clipped_layer = result["OUTPUT"]
+
+        # If the result is a string (file path) load it as a layer
+        if isinstance(clipped_layer, str):
+            clipped_layer = QgsVectorLayer(clipped_layer, layer_name, "ogr")
+
+        # Check if the layer is valid and has features
+        if not clipped_layer.isValid():
+            raise ClipError("Failed to create valid clipped layer")
+
+        if clipped_layer.featureCount() == 0:
+            raise ClipError(
+                "Clipping resulted in empty layer - no overlapping features found"
+            )
+
+        return clipped_layer
+
+    def extract_within_distance_with_processing(
+            self, layer_to_check, ref_layer, distance, layer_name
+    ):
+        from qgis.PyQt.QtWidgets import QProgressDialog
+        from qgis.PyQt.QtCore import Qt
+        from qgis.core import QgsMessageLog, Qgis
+
+        # Get feature counts to estimate progress
+        ref_feature_count = ref_layer.featureCount()
+
+        # Create a progress dialog
+        progress = QProgressDialog("Extracting features within distance...", "Cancel", 0, 100, self.iface.mainWindow())
+        progress.setWindowTitle("Processing")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setValue(0)
+        progress.show()
+
+        try:
+            # Create the processing parameters
+            extract_within_params = {
+                "INPUT": ref_layer,  # Layer to extract features from
+                "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
+                "INTERSECT": layer_to_check,  # Reference layer for distance comparison
+                "DISTANCE": distance,  # The distance threshold (in layer's CRS units)
+                "OUTPUT": "memory:" + layer_name,  # Output layer (temporary)
+            }
+
+            # Since processing.run doesn't provide progress updates, we'll use runAndLoadResults
+            # which will at least show the algorithm's own progress
+            progress.setValue(10)  # Show that we've started
+            QgsMessageLog.logMessage(f"Starting extraction within {distance} units", "DistanceExtraction")
+
+            # Run the clip processing algorithm
+            result = processing.run("native:extractbylocation", extract_within_params, feedback=None)
+
+            # Get the output layer
+            output_layer = result["OUTPUT"]
+
+            # Show completion progress
+            progress.setValue(100)
+            QgsMessageLog.logMessage(
+                f"Extraction complete. Found {output_layer.featureCount()} features within distance",
+                "DistanceExtraction")
+
+            # If the result is a string (file path) load it as a layer
+            if isinstance(output_layer, str):
+                output_layer = QgsVectorLayer(output_layer, layer_name, "ogr")
+
+            # Check if the layer is valid and has features
+            if not output_layer.isValid():
+                raise ClipError("Failed to create valid clipped layer")
+
+            if output_layer.featureCount() == 0:
+                raise ClipError(
+                    "Clipping resulted in empty layer - no overlapping features found"
+                )
+
+            return output_layer
+        except Exception as e:
+            QgsMessageLog.logMessage(f"Error during extraction: {str(e)}", "DistanceExtraction", level=Qgis.Critical)
+            progress.cancel()
+            raise e
+        finally:
+            # Make sure the progress dialog is closed
+            progress.close()
+
     def clip_layer_with_processing(self, layer, region_layer, layer_name):
         """
         Clips a layer using selected features from region_layer or the whole layer if nothing is selected.
@@ -252,6 +353,9 @@ class GeolinesQCPlugin:
         return clipped_layer
 
     def analyze_layers(self):
+
+        # Clear logs
+        QgsMessageLog.logMessage("---- Starting a new operation ----", "GeoLinesQC", level=Qgis.Info,)
         # Get selected layers
         # TODO check validiy
 
@@ -275,9 +379,18 @@ class GeolinesQCPlugin:
             "Loading data...",
             level=Qgis.Info,
         )
+        QgsMessageLog.logMessage(
+            "Loading data...",
+            "GeoLinesQC",
+            level=Qgis.Info,
+        )
+        self.log_debug("Loading data...", show_in_bar=False)
 
         input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
         reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
+        # Create Spatial Indices
+        create_spatial_index(input_layer_full)
+        create_spatial_index(reference_layer_full)
 
         # Get the selected region layer
         """region_geometry = (
@@ -298,6 +411,8 @@ class GeolinesQCPlugin:
                 "Clipping data...",
                 level=Qgis.Info,
             )
+            self.log_debug("Clipping data...", show_in_bar=False)
+
             # Convert the region geometry to a vector layer
             # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
             region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
@@ -317,16 +432,25 @@ class GeolinesQCPlugin:
                     f"Unexpected error during clipping: {str(e)}",
                     level=Qgis.Critical,
                 )
+                QgsMessageLog.logMessage(
+                f"Unexpected error during clipping: {str(e)}",
+                "GeoLinesQC",
+                level=Qgis.Critical,
+                )
 
             # TODO
             if ADD_CLIPPED_LAYER_TO_MAP and input_layer:
                 QgsProject.instance().addMapLayer(input_layer)
+                create_spatial_index(input_layer)
 
             # Clip layer2 to the selected region
+            self.log_debug("Clipping reference data...", show_in_bar=False)
             try:
+                layer2_name = f"{layer2_name} clipped"
                 reference_layer = self.clip_layer_with_processing(
-                    reference_layer_full, region_layer, f"Clipped {layer2_name}"
+                    reference_layer_full, region_layer, layer2_name
                 )
+                create_spatial_index(reference_layer)
 
             except ClipError as e:
                 self.iface.messageBar().pushMessage(
@@ -338,10 +462,35 @@ class GeolinesQCPlugin:
                     f"Unexpected error during clipping: {str(e)}",
                     level=Qgis.Critical,
                 )
-            if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
-                QgsProject.instance().addMapLayer(reference_layer)
+
+        # Extract features of ref layer within distance
+        self.log_debug(
+            f"Selecting reference data within {buffer_distance}...", show_in_bar=False
+        )
+        try:
+            layer2_name = f"{layer2_name} extracted"
+            reference_layer = self.extract_within_distance_with_processing(
+
+                input_layer,
+                reference_layer,
+                buffer_distance * 1.05,
+                layer2_name,
+            )
+
+        except ClipError as e:
+            self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
+        except Exception as e:
+            self.iface.messageBar().pushMessage(
+                "Error",
+                f"Unexpected error during extracting from distance: {str(e)}",
+                level=Qgis.Critical,
+            )
+        if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
+            QgsProject.instance().addMapLayer(reference_layer)
+            create_spatial_index(reference_layer)
 
         # Create a new memory layer to store the segmented lines with intersection results
+        self.log_debug("Creating ouput memory layer...", show_in_bar=False)
         output_layer = QgsVectorLayer(
             "LineString?crs=" + input_layer.crs().authid(),
             f"{layer1_name} — {layer2_name} {buffer_distance}",
@@ -361,6 +510,12 @@ class GeolinesQCPlugin:
             "Starting analysis...",
             level=Qgis.Info,
         )
+        QgsMessageLog.logMessage(
+            "Starting analysis...",
+            "GeoLinesQC",
+            level=Qgis.Info,
+        )
+        self.log_debug("Starting analysis...", show_in_bar=False)
 
         # Initialize progress dialog
         progress = QProgressDialog(
@@ -385,6 +540,7 @@ class GeolinesQCPlugin:
             "GeoLinesQC",
             level=Qgis.Info,
         )
+        nb_segments = 0
 
         for i, feature in enumerate(input_layer.getFeatures()):
             # Update progress bar
@@ -399,9 +555,12 @@ class GeolinesQCPlugin:
                 break
             line_geometry = feature.geometry()
             segments = self.segment_line(line_geometry, segment_length)
+            summary = f"Feature {i} has {len(segments)} segments"
+            self.log_debug(summary)
 
             # Add each segment to the output layer with intersection results
             for segment in segments:
+                nb_segments += 1
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(segment)
 
@@ -413,16 +572,16 @@ class GeolinesQCPlugin:
 
                 output_layer.dataProvider().addFeature(new_feature)
 
-        self.iface.messageBar().pushMessage(
+        """self.iface.messageBar().pushMessage(
             "Info",
-            "Segmentation and intersection check complete. Output layer added to the map.",
+            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
             level=Qgis.Info,
-        )
+        )"""
         # Close the progress dialog
         progress.setValue(input_layer.featureCount())
         self.iface.messageBar().pushMessage(
             "Success",
-            "Segmentation and intersection check complete. Output layer added to the map.",
+            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
             level=Qgis.Success,
         )
         # Load style and add to map
@@ -461,18 +620,25 @@ class GeolinesQCPlugin:
     def log_debug(self, message, show_in_bar=False):
         """Unified logging function that writes to both log file and QGIS log"""
         # Log to QGIS Message Log
-        QgsMessageLog.logMessage(message, "segment_line", level=Qgis.Info)
+        QgsMessageLog.logMessage(message, "GeoLinesQC", level=Qgis.Info)
 
         # Optionally show in message bar
         if show_in_bar:
             self.iface.messageBar().pushMessage("Debug", message, level=Qgis.Info)
 
         # Log to file
-        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+
+        # Get the path to the QGIS user profile directory
+        profile_path = QgsApplication.qgisSettingsDirPath()
+
+        # Construct the path to your plugin's logs directory
+        log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
+
+       # log_dir = os.path.join(os.path.dirname(__file__), "logs")
         if not os.path.exists(log_dir):
             os.makedirs(log_dir)
 
-        log_file = os.path.join(log_dir, "segment_line_debug.log")
+        log_file = os.path.join(log_dir, "debug.log")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with open(log_file, "a") as f:
