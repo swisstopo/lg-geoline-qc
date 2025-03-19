@@ -504,10 +504,17 @@ class GeolinesQCPlugin:
         timer = QTimer(self.iface.mainWindow())
 
         def update_progress():
-            if extract_task.feedback:
-                progress.setValue(int(extract_task.feedback.progress()))
-                if extract_task.feedback.isCanceled() or not extract_task.isActive():
-                    timer.stop()
+            try:
+                if extract_task and extract_task.feedback:
+                    progress.setValue(int(extract_task.feedback.progress()))
+                    if (
+                        extract_task.feedback.isCanceled()
+                        or not extract_task.isActive()
+                    ):
+                        timer.stop()
+            except RuntimeError:
+                # The task has been deleted
+                timer.stop()
 
         timer.timeout.connect(update_progress)
         timer.start(100)
@@ -547,17 +554,24 @@ class GeolinesQCPlugin:
 
             if success:
                 result_layer = final_task.output_layer
-                QgsMessageLog.logMessage("Final analysis complete", "GeoLinesQC")
 
                 # Add result to map
                 if result_layer:
                     QgsProject.instance().addMapLayer(result_layer)
                     # Load style and add to map
                     self.add_styled_layer(result_layer, "intersects")
+                    QgsMessageLog.logMessage(
+                        "Result layer + style added to the map",
+                        "GeoLinesQC",
+                        level=Qgis.Info,
+                    )
                     # close dialog
                     self.dialog.close()
 
                 # Show completion message
+                QgsMessageLog.logMessage(
+                    "Final analysis complete", "GeoLinesQC", level=Qgis.Success
+                )
                 self.iface.messageBar().pushMessage(
                     "Success", "Final analysis complete", level=Qgis.Success
                 )
