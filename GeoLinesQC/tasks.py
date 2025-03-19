@@ -18,7 +18,9 @@ from qgis.core import (
 )
 from qgis.PyQt.QtCore import QVariant
 
-from GeoLinesQC.errors import ClipError
+from GeoLinesQC.errors import ClipError, IntersectError
+
+
 
 
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
@@ -464,7 +466,7 @@ class SegmentAndCheckTask(QgsTask):
             segments = self.segment_line(
                 line_geometry, segment_length
             )  # Custom segmentation logic
-            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress:.0%}]"
+            msg = f"{i}/{total_features} Feature with {len(segments)} [{(progress/100.0):.0%}]"
             self.log_debug(msg)
             QgsMessageLog.logMessage(msg, "GeoLinesQC", level=Qgis.Info)
             # Process each segment

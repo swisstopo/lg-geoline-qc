@@ -598,19 +598,30 @@ class GeolinesQCPlugin:
         timer = QTimer(self.iface.mainWindow())
 
         def update_progress():
-            if not final_task or final_task.isCanceled():
-                if final_task.feedback:
-                    # TODO reactivate
-                    # progress.setValue(int(final_task.feedback.progress()))
-                    if final_task.feedback.isCanceled() or not final_task.isActive():
+            try:
+                if final_task and final_task.feedback:
+                    progress.setValue(int(final_task.feedback.progress()))
+                    if (
+                            final_task.feedback.isCanceled()
+                            or not final_task.isActive()
+                    ):
                         timer.stop()
+            except RuntimeError:
+                # The task has been deleted
+                timer.stop()
 
+        # TODO: this make QGis crash
         # timer.timeout.connect(update_progress)
         timer.start(100)
 
         # Start task
         QgsApplication.taskManager().addTask(final_task)
         progress.show()
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+
 
     def handle_task_error(self, task_name, exception):
         """Handle errors from tasks"""
