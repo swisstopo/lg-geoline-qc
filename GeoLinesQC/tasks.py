@@ -472,13 +472,16 @@ class SegmentAndCheckTask(QgsTask):
                 nb_segments += 1
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(segment)
+                intersects = False
 
-                if PROCESS_SEGMENTS:
+                try:
                     # Check for intersections with the reference layer
                     intersects = self.buffer_and_check_intersections(
                         segment, reference_layer, buffer_distance
                     )
                     new_feature.setAttribute("intersects", intersects)
+                except Exception as e:
+                    self.log_debug(f"Error while intersecting segment of feature {i}: {segment}: {e}")
 
                 # Add the feature to the memory layer
                 output_layer.dataProvider().addFeature(new_feature)
