@@ -21,6 +21,9 @@ from qgis.PyQt.QtCore import QVariant
 from GeoLinesQC.errors import ClipError
 
 
+PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
+
+
 class ClipLayerTask(QgsTask):
     """Task for clipping a layer with a mask layer"""
 
@@ -461,7 +464,7 @@ class SegmentAndCheckTask(QgsTask):
             segments = self.segment_line(
                 line_geometry, segment_length
             )  # Custom segmentation logic
-            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress}%]"
+            msg = f"{i}/{total_features} Feature with {len(segments)} [{progress:.0%}]"
             self.log_debug(msg)
             QgsMessageLog.logMessage(msg, "GeoLinesQC", level=Qgis.Info)
             # Process each segment
@@ -470,11 +473,12 @@ class SegmentAndCheckTask(QgsTask):
                 new_feature = QgsFeature(output_layer.fields())
                 new_feature.setGeometry(segment)
 
-                # Check for intersections with the reference layer
-                intersects = self.buffer_and_check_intersections(
-                    segment, reference_layer, buffer_distance
-                )
-                new_feature.setAttribute("intersects", intersects)
+                if PROCESS_SEGMENTS:
+                    # Check for intersections with the reference layer
+                    intersects = self.buffer_and_check_intersections(
+                        segment, reference_layer, buffer_distance
+                    )
+                    new_feature.setAttribute("intersects", intersects)
 
                 # Add the feature to the memory layer
                 output_layer.dataProvider().addFeature(new_feature)
