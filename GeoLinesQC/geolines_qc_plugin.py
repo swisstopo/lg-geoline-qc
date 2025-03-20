@@ -28,7 +28,12 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from GeoLinesQC.errors import ClipError
-from GeoLinesQC.tasks import ClipLayerTask, ExtractionTask, SegmentAndCheckTask
+from GeoLinesQC.tasks import (
+    ClipLayerTask,
+    ExtractionTask,
+    SegmentAndCheckTask,
+    GeoLinesProcessingTask,
+)
 from GeoLinesQC.utils import create_spatial_index
 
 DEFAULT_BUFFER = 500.0
@@ -527,6 +532,84 @@ class GeolinesQCPlugin:
         self, input_layer, reference_layer, segment_length, buffer_distance
     ):
         """Start the final analysis step in the background"""
+
+        # Create the task
+        task = GeoLinesProcessingTask(
+            description="Process line features",
+            input_layer=input_layer,
+            reference_layer=reference_layer,
+            buffer_distance=buffer_distance,
+            split_length=segment_length,
+            output_name=None,  # "C:/path/to/output/processed_lines.gpkg",
+            output_field_name="has_nearby_features",
+            run_distance_check=True,
+            run_line_split=True,
+        )
+
+        # Connect signals
+        task.taskCompleted.connect(lambda: self.on_task_completed(task))
+        task.taskTerminated.connect(
+            lambda: self.handle_task_error("GeoLines processing", task.exception)
+        )
+
+        # Create progress dialog
+        progress = QProgressDialog(
+            "Processing lines...", "Cancel", 0, 100, self.iface.mainWindow()
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.canceled.connect(task.cancel)
+
+        # Setup progress updates
+        timer = QTimer(self.iface.mainWindow())
+
+        def update_progress():
+            try:
+                if task and task.feedback:
+                    progress.setValue(int(task.feedback.progress()))
+                    if task.feedback.isCanceled() or not task.isActive():
+                        timer.stop()
+            except RuntimeError:
+                # The task has been deleted
+                timer.stop()
+
+        def on_task_completed(self, task):
+            timer.stop()  # Stop the progress timer
+
+            if task.output_layer:
+                # Add the layer to the map
+                QgsProject.instance().addMapLayer(task.output_layer)
+
+                # Show a success message
+                self.iface.messageBar().pushSuccess(
+                    "GeoLines Processing",
+                    f"Processing completed successfully. {task.result_message}",
+                )
+
+        def handle_task_error(self, task_name, exception):
+            timer.stop()  # Stop the progress timer
+
+            if exception:
+                self.iface.messageBar().pushCritical(
+                    "Task Error",
+                    f"The {task_name} task encountered an error: {exception}",
+                )
+            else:
+                self.iface.messageBar().pushWarning(
+                    "Task Cancelled", f"The {task_name} task was cancelled"
+                )
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+        # Start task
+        QgsApplication.taskManager().addTask(task)
+        progress.show()
+
+    # original version
+    def start_final_step_old(
+        self, input_layer, reference_layer, segment_length, buffer_distance
+    ):
+        """Start the final analysis step in the background"""
         self.iface.messageBar().pushMessage(
             "Info", "Performing final analysis...", level=Qgis.Info
         )
@@ -601,10 +684,7 @@ class GeolinesQCPlugin:
             try:
                 if final_task and final_task.feedback:
                     progress.setValue(int(final_task.feedback.progress()))
-                    if (
-                            final_task.feedback.isCanceled()
-                            or not final_task.isActive()
-                    ):
+                    if final_task.feedback.isCanceled() or not final_task.isActive():
                         timer.stop()
             except RuntimeError:
                 # The task has been deleted
@@ -620,8 +700,6 @@ class GeolinesQCPlugin:
 
         timer.timeout.connect(update_progress)
         timer.start(100)
-
-
 
     def handle_task_error(self, task_name, exception):
         """Handle errors from tasks"""
