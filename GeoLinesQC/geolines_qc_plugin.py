@@ -547,7 +547,7 @@ class GeolinesQCPlugin:
         )
 
         # Connect signals
-        task.taskCompleted.connect(lambda: self.on_task_completed(task))
+        task.taskCompleted.connect(lambda: on_task_completed(task))
         task.taskTerminated.connect(
             lambda: self.handle_task_error("GeoLines processing", task.exception)
         )
@@ -572,7 +572,7 @@ class GeolinesQCPlugin:
                 # The task has been deleted
                 timer.stop()
 
-        def on_task_completed(self, task):
+        def on_task_completed(task):
             timer.stop()  # Stop the progress timer
 
             if task.output_layer:
@@ -585,7 +585,17 @@ class GeolinesQCPlugin:
                     f"Processing completed successfully. {task.result_message}",
                 )
 
-        def handle_task_error(self, task_name, exception):
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+        # Start task
+
+        QgsApplication.taskManager().addTask(task)
+        progress.show()
+
+
+
+    def handle_task_error(self, task_name, exception):
             timer.stop()  # Stop the progress timer
 
             if exception:
@@ -598,12 +608,7 @@ class GeolinesQCPlugin:
                     "Task Cancelled", f"The {task_name} task was cancelled"
                 )
 
-        timer.timeout.connect(update_progress)
-        timer.start(100)
 
-        # Start task
-        QgsApplication.taskManager().addTask(task)
-        progress.show()
 
     # original version
     def start_final_step_old(

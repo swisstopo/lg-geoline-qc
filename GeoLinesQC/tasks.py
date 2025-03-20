@@ -10,6 +10,8 @@ from qgis.core import (
     QgsMessageLog,
     QgsPoint,
     QgsProcessingFeedback,
+    QgsProcessingUtils,
+    QgsProcessingContext,
     QgsProject,
     QgsSpatialIndex,
     QgsTask,
@@ -55,6 +57,29 @@ class GeoLinesProcessingTask(QgsTask):
         self.exception = None
         self.feedback = QgsProcessingFeedback()
         self.result_message = ""
+
+    def log_debug(self, message):
+        """Unified logging function that writes to both log file and QGIS log"""
+        # Log to QGIS Message Log
+        QgsMessageLog.logMessage(message, "GeoLinesQC", level=Qgis.Info)
+
+        # Log to file
+
+        # Get the path to the QGIS user profile directory
+        profile_path = QgsApplication.qgisSettingsDirPath()
+
+        # Construct the path to your plugin's logs directory
+        log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
+
+        # log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        log_file = os.path.join(log_dir, "debug.log")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with open(log_file, "a") as f:
+            f.write(f"{timestamp}: {message}\n")
 
     def run(self):
         """Run the processing operations in the background"""
@@ -158,7 +183,7 @@ class GeoLinesProcessingTask(QgsTask):
                         QgsProject.instance().addMapLayer(buffered_result["OUTPUT"])
 
                 # Check for intersections
-                QgsMessageLog.logMessage("STEP 2b. Check for intersection...", "GeoLinesQC", level=Qgis.Info)
+                QgsMessageLog.logMessage("STEP 2b. Join by location...", "GeoLinesQC", level=Qgis.Info)
                 intersect_result = processing.run(
                     "native:joinattributesbylocation",
                     {
@@ -181,14 +206,22 @@ class GeoLinesProcessingTask(QgsTask):
                     return False
 
                 # Create a set of feature IDs that have intersections
-                intersect_layer = QgsProcessingUtils.mapLayerFromString(
-                    intersect_result["OUTPUT"], QgsProcessingContext()
-                )
+                QgsMessageLog.logMessage("STEP 3. Check for intersection...", "GeoLinesQC", level=Qgis.Info)
 
+                if isinstance(current_layer, str):
+                    intersect_layer = QgsProcessingUtils.mapLayerFromString(
+                        intersect_result["OUTPUT"], QgsProcessingContext()
+                    )
+                else:
+                    intersect_layer = intersect_result["OUTPUT"]
+                QgsMessageLog.logMessage("Error...", "GeoLinesQC", level=Qgis.Info)
+
+                self.log_debug("Before 'has_intersection")
                 has_intersections = set()
                 for feature in intersect_layer.getFeatures():
                     orig_id = feature.id()
                     has_intersections.add(orig_id)
+                self.log_debug("After 'has_intersection")
 
                 # Update the current layer with results
                 current_layer.startEditing()
@@ -197,6 +230,7 @@ class GeoLinesProcessingTask(QgsTask):
                     current_layer.changeAttributeValue(
                         feature_id, field_index, feature_id in has_intersections
                     )
+                self.log_debug("After 'changeAttribute")
                 current_layer.commitChanges()
 
                 self.result_message += f"Features checked for proximity within {self.buffer_distance} units. "
@@ -204,8 +238,9 @@ class GeoLinesProcessingTask(QgsTask):
                 self.setProgress(90)
                 self.feedback.setProgress(90)
 
+            self.log_debug("Final output")
             # Prepare final output
-            if self.output_name:
+            '''if self.output_name:
                 # Save to the specified output
                 output_path = self.output_name
                 if not output_path.lower().endswith((".shp", ".gpkg", ".geojson")):
@@ -220,13 +255,13 @@ class GeoLinesProcessingTask(QgsTask):
                 self.output_layer = QgsProcessingUtils.mapLayerFromString(
                     save_result["OUTPUT"], QgsProcessingContext()
                 )
-            else:
-                # Use the current layer as output
-                if isinstance(current_layer, str):
+            else:'''
+            # Use the current layer as output
+            if isinstance(current_layer, str):
                     self.output_layer = QgsProcessingUtils.mapLayerFromString(
                         current_layer, QgsProcessingContext()
                     )
-                else:
+            else:
                     self.output_layer = current_layer
 
             self.setProgress(100)
