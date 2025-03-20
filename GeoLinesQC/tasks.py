@@ -24,7 +24,7 @@ from GeoLinesQC.errors import ClipError, IntersectError
 
 
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
-
+ADD_INTERMEDIATE_LAYERS_TO_MAP = True
 
 # New monster task
 class GeoLinesProcessingTask(QgsTask):
@@ -115,7 +115,7 @@ class GeoLinesProcessingTask(QgsTask):
                 self.result_message += (
                     f"Lines split into segments of {self.split_length} units. "
                 )
-                if current_layer:
+                if current_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
                     QgsProject.instance().addMapLayer(current_layer)
                 QgsMessageLog.logMessage(f"Lines split into segments of {self.split_length} units. ", "GeoLinesQC", level=Qgis.Info)
 
@@ -179,7 +179,7 @@ class GeoLinesProcessingTask(QgsTask):
                 if self.isCanceled():
                     return False
 
-                if buffered_result["OUTPUT"]:
+                if buffered_result["OUTPUT"] and ADD_INTERMEDIATE_LAYERS_TO_MAP:
                         QgsProject.instance().addMapLayer(buffered_result["OUTPUT"])
 
                 # Check for intersections
@@ -438,7 +438,8 @@ class ExtractionTask(QgsTask):
                 level=Qgis.Success,
             )
             # Optionally add the output layer to the map
-            QgsProject.instance().addMapLayer(self.output_layer)
+            if self.output_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+                QgsProject.instance().addMapLayer(self.output_layer)
 
 
 '''class SegmentAndCheckTask(QgsTask):
