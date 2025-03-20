@@ -580,7 +580,7 @@ class GeolinesQCPlugin:
                 # Add the layer to the map
                 QgsProject.instance().addMapLayer(task.output_layer)
                 # Load style and add to map
-                self.add_styled_layer(task.output_layer, "intersects")
+                self.add_styled_layer(task.output_layer, "has_nearby_features")
                 QgsMessageLog.logMessage(
                         "Result layer + style added to the map",
                         "GeoLinesQC",
