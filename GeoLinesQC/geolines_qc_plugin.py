@@ -574,14 +574,24 @@ class GeolinesQCPlugin:
 
         def on_task_completed(task):
             timer.stop()  # Stop the progress timer
+            progress.close()
 
             if task.output_layer:
                 # Add the layer to the map
                 QgsProject.instance().addMapLayer(task.output_layer)
+                # Load style and add to map
+                self.add_styled_layer(task.output_layer, "intersects")
+                QgsMessageLog.logMessage(
+                        "Result layer + style added to the map",
+                        "GeoLinesQC",
+                        level=Qgis.Info,
+                )
+                # close dialog
+                self.dialog.close()
 
                 # Show a success message
                 self.iface.messageBar().pushSuccess(
-                    "GeoLines Processing",
+                    "GeoLines QC Processing",
                     f"Processing completed successfully. {task.result_message}",
                 )
 

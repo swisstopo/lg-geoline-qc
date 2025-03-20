@@ -266,6 +266,8 @@ class GeoLinesProcessingTask(QgsTask):
 
             self.setProgress(100)
             self.feedback.setProgress(100)
+            self.output_layer.setName("Result")
+            self.log_debug("Before return")
             return True
 
         except Exception as e:
