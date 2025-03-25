@@ -236,6 +236,7 @@ class GeoLinesProcessingTask(QgsTask):
 
                 self.setProgress(100)
                 self.feedback.setProgress(100)
+                self.log_debug("Task 'GeoLinesProcessingTask' successfull", level=Qgis.Success)
                 return True
                 """self.setProgress(60)
                 self.feedback.setProgress(60)
@@ -339,7 +340,7 @@ class GeoLinesProcessingTask(QgsTask):
                         feature_id, field_index, feature_id in has_intersections
                     )
                 self.log_debug("After 'changeAttribute")
-                current_layer.commitChanges()"""
+                current_layer.commitChanges()
 
                 self.result_message += f"Features checked for proximity within {self.buffer_distance} units. "
 
@@ -361,7 +362,7 @@ class GeoLinesProcessingTask(QgsTask):
             self.feedback.setProgress(100)
             self.output_layer.setName("Result")
             self.log_debug("Before return")
-            return True
+            return True"""
 
         except Exception as e:
             self.exception = e
