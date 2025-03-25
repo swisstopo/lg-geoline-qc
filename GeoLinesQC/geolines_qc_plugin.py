@@ -451,13 +451,13 @@ class GeolinesQCPlugin:
             100,
             self.iface.mainWindow(),
         )
-        progress.setWindowTitle("Processing")
+        progress.setWindowTitle("Extracting")
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
 
         # Create extraction task
         extract_task = ExtractionTask(
-            "Extract features within distance",
+            f"Extract features within {buffer_distance} meters",
             reference_layer,
             input_layer,
             buffer_distance * 1.05,

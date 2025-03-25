@@ -93,7 +93,7 @@ class GeoLinesProcessingTask(QgsTask):
             current_layer = self.input_layer
 
             # Step 1: Split lines if requested
-            QgsMessageLog.logMessage("STEP 1. Split by length...", "GeoLinesQC", level=Qgis.Info )
+            QgsMessageLog.logMessage(f"STEP 1. Split {current_layer} by length...", "GeoLinesQC", level=Qgis.Info )
             if self.run_line_split and self.split_length:
                 self.setProgress(10)
                 self.feedback.setProgress(10)
@@ -384,17 +384,25 @@ class ExtractionTask(QgsTask):
 
         try:
             # Create the processing parameters
+            # "native:extractbylocation",
             extract_within_params = {
                 "INPUT": self.input_layer,
                 "PREDICATE": [6],  # Spatial predicate (6 = Within Distance)
                 "INTERSECT": self.reference_layer,
-                "DISTANCE": self.distance,
+                "DISTANCE": self.distance * 2,  # TODO: double the distance!!!
+                "OUTPUT": f"memory:{self.output_name}",
+            }
+            # native:extractwithindistance
+            extract_within_params = {
+                "INPUT": self.input_layer,
+                "REFERENCE": self.reference_layer,
+                "DISTANCE": self.distance * 2,  # TODO: double the distance!!!
                 "OUTPUT": f"memory:{self.output_name}",
             }
 
             # Run the extraction algorithm
             result = processing.run(
-                "native:extractbylocation",
+                "native:extractwithindistance",  # TODO, test native:extractwithindistance
                 extract_within_params,
                 feedback=self.feedback,
             )
