@@ -28,12 +28,14 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from GeoLinesQC.errors import ClipError
-from GeoLinesQC.tasks import (
+
+"""from GeoLinesQC.tasks import (
     ClipLayerTask,
     ExtractionTask,
-    SegmentAndCheckTask,
     GeoLinesProcessingTask,
-)
+    SegmentAndCheckTask,
+)"""
+from GeoLinesQC.tasks import GeoLinesProcessingTask
 from GeoLinesQC.utils import create_spatial_index
 
 DEFAULT_BUFFER = 500.0
@@ -194,7 +196,7 @@ class GeolinesQCPlugin:
         self.dialog.setLayout(layout)
         self.dialog.exec_()
 
-    def extract_within_distance_with_processing(
+    """def extract_within_distance_with_processing(
         self, layer_to_check, ref_layer, distance, layer_name
     ):
         # Create the processing parameters
@@ -226,9 +228,9 @@ class GeolinesQCPlugin:
                 "Clipping resulted in empty layer - no overlapping features found"
             )
 
-        return clipped_layer
+        return clipped_layer"""
 
-    def clip_layer_with_processing(self, layer, region_layer, layer_name):
+    '''def clip_layer_with_processing(self, layer, region_layer, layer_name):
         """
         Clips a layer using selected features from region_layer or the whole layer if nothing is selected.
 
@@ -279,7 +281,7 @@ class GeolinesQCPlugin:
                 "Clipping resulted in empty layer - no overlapping features found"
             )
 
-        return clipped_layer
+        return clipped_layer'''
 
     def analyze_layers(self):
         """Main analysis function that chains processing steps together using background tasks"""
@@ -324,8 +326,11 @@ class GeolinesQCPlugin:
                 "Info", "No region selected. Using the full dataset", level=Qgis.Info
             )
             # Skip clipping and go directly to extraction
-            self.start_extraction_step(
+            """self.start_extraction_step(
                 input_layer_full, reference_layer_full, buffer_distance, segment_length
+            )"""
+            self.start_single_task(
+                input_layer_full, reference_layer_full, segment_length, buffer_distance
             )
         else:
             # Get mask layer
@@ -335,8 +340,9 @@ class GeolinesQCPlugin:
             )
             self.log_debug("Clipping data...", show_in_bar=False)
 
+            # TODO reactivate
             # Start the clipping process
-            self.start_clipping_step(
+            """self.start_clipping_step(
                 input_layer_full,
                 reference_layer_full,
                 region_layer,
@@ -344,9 +350,88 @@ class GeolinesQCPlugin:
                 layer2_name,
                 buffer_distance,
                 segment_length,
-            )
+            )"""
 
-    def start_clipping_step(
+    # New single task
+
+    def start_single_task(
+        self, input_layer, reference_layer, segment_length, buffer_distance
+    ):
+        """Start the final analysis step in the background"""
+
+        # Create the task
+        task = GeoLinesProcessingTask(
+            description="Process line features",
+            input_layer=input_layer,
+            reference_layer=reference_layer,
+            buffer_distance=buffer_distance,
+            split_length=segment_length,
+            output_name=f"Result {input_layer.name()} - {reference_layer.name()}",
+            output_field_name="has_nearby_features",
+            run_distance_check=True,
+            run_line_split=True,
+        )
+
+        # Connect signals
+        task.taskCompleted.connect(lambda: on_task_completed(task))
+        task.taskTerminated.connect(
+            lambda: self.handle_task_error("GeoLines processing", task.exception)
+        )
+
+        # Create progress dialog
+        progress = QProgressDialog(
+            "Processing lines...", "Cancel", 0, 100, self.iface.mainWindow()
+        )
+        progress.setWindowModality(Qt.WindowModal)
+        progress.canceled.connect(task.cancel)
+
+        # Setup progress updates
+        timer = QTimer(self.iface.mainWindow())
+
+        def update_progress():
+            try:
+                if task and task.feedback:
+                    progress.setValue(int(task.feedback.progress()))
+                    if task.feedback.isCanceled() or not task.isActive():
+                        timer.stop()
+            except RuntimeError:
+                # The task has been deleted
+                timer.stop()
+
+        def on_task_completed(task):
+            timer.stop()  # Stop the progress timer
+            progress.close()
+
+            if task.output_layer:
+                # Add the layer to the map
+                QgsProject.instance().addMapLayer(task.output_layer)
+                # Load style and add to map
+                self.add_styled_layer(task.output_layer, "has_nearby_features")
+                QgsMessageLog.logMessage(
+                    "Result layer + style added to the map",
+                    "GeoLinesQC",
+                    level=Qgis.Info,
+                )
+                # close dialog
+                self.dialog.close()
+
+                # Show a success message
+                self.iface.messageBar().pushSuccess(
+                    "GeoLines QC Processing",
+                    f"Processing completed successfully. {task.result_message}",
+                )
+
+        timer.timeout.connect(update_progress)
+        timer.start(100)
+
+        # Start task
+
+        QgsApplication.taskManager().addTask(task)
+        progress.show()
+
+    # ---
+
+    '''def start_clipping_step(
         self,
         input_layer_full,
         reference_layer_full,
@@ -526,9 +611,9 @@ class GeolinesQCPlugin:
 
         # Start task
         QgsApplication.taskManager().addTask(extract_task)
-        progress.show()
+        progress.show()'''
 
-    def start_final_step(
+    '''def start_final_step(
         self, input_layer, reference_layer, segment_length, buffer_distance
     ):
         """Start the final analysis step in the background"""
@@ -582,9 +667,9 @@ class GeolinesQCPlugin:
                 # Load style and add to map
                 self.add_styled_layer(task.output_layer, "has_nearby_features")
                 QgsMessageLog.logMessage(
-                        "Result layer + style added to the map",
-                        "GeoLinesQC",
-                        level=Qgis.Info,
+                    "Result layer + style added to the map",
+                    "GeoLinesQC",
+                    level=Qgis.Info,
                 )
                 # close dialog
                 self.dialog.close()
@@ -601,248 +686,20 @@ class GeolinesQCPlugin:
         # Start task
 
         QgsApplication.taskManager().addTask(task)
-        progress.show()
-
-
+        progress.show()'''
 
     def handle_task_error(self, task_name, exception):
-            timer.stop()  # Stop the progress timer
+        timer.stop()  # Stop the progress timer
 
-            if exception:
-                self.iface.messageBar().pushCritical(
-                    "Task Error",
-                    f"The {task_name} task encountered an error: {exception}",
-                )
-            else:
-                self.iface.messageBar().pushWarning(
-                    "Task Cancelled", f"The {task_name} task was cancelled"
-                )
-
-
-
-    # original version
-    def start_final_step_old(
-        self, input_layer, reference_layer, segment_length, buffer_distance
-    ):
-        """Start the final analysis step in the background"""
-        self.iface.messageBar().pushMessage(
-            "Info", "Performing final analysis...", level=Qgis.Info
-        )
-
-        # Create final analysis task
-        final_task = SegmentAndCheckTask(
-            "Segment and check intersections",
-            input_layer,
-            reference_layer,
-            segment_length,
-            buffer_distance,
-        )
-
-        # Progress dialog
-        progress = QProgressDialog(
-            "Analyzing intersections...", "Cancel", 0, 100, self.iface.mainWindow()
-        )
-        progress.setWindowTitle("Processing")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
-
-        # Function to handle completion
-        def on_final_complete(success):
-            progress.close()
-
-            if success:
-                result_layer = final_task.output_layer
-
-                # Add result to map
-                if result_layer:
-                    QgsProject.instance().addMapLayer(result_layer)
-                    # Load style and add to map
-                    self.add_styled_layer(result_layer, "intersects")
-                    QgsMessageLog.logMessage(
-                        "Result layer + style added to the map",
-                        "GeoLinesQC",
-                        level=Qgis.Info,
-                    )
-                    # close dialog
-                    self.dialog.close()
-
-                # Show completion message
-                QgsMessageLog.logMessage(
-                    "Final analysis complete", "GeoLinesQC", level=Qgis.Success
-                )
-                self.iface.messageBar().pushMessage(
-                    "Success", "Final analysis complete", level=Qgis.Success
-                )
-            else:
-                self.iface.messageBar().pushMessage(
-                    "Error",
-                    f"Final analysis failed: {final_task.exception}",
-                    level=Qgis.Critical,
-                )
-
-        # Connect signals
-        # final_task.taskCompleted.connect(on_final_complete)
-        # TODO
-        final_task.taskCompleted.connect(
-            lambda: on_final_complete(True)
-        )  # Always assume success
-        final_task.taskTerminated.connect(
-            lambda: self.handle_task_error("Final analysis", final_task.exception)
-        )
-
-        progress.canceled.connect(final_task.cancel)
-
-        # Setup progress updates
-        timer = QTimer(self.iface.mainWindow())
-
-        def update_progress():
-            try:
-                if final_task and final_task.feedback:
-                    progress.setValue(int(final_task.feedback.progress()))
-                    if final_task.feedback.isCanceled() or not final_task.isActive():
-                        timer.stop()
-            except RuntimeError:
-                # The task has been deleted
-                timer.stop()
-
-        # TODO: this make QGis crash
-        # timer.timeout.connect(update_progress)
-        timer.start(100)
-
-        # Start task
-        QgsApplication.taskManager().addTask(final_task)
-        progress.show()
-
-        timer.timeout.connect(update_progress)
-        timer.start(100)
-
-    def handle_task_error(self, task_name, exception):
-        """Handle errors from tasks"""
-        error_msg = str(exception) if exception else "Unknown error"
-        QgsMessageLog.logMessage(
-            f"Error in {task_name}: {error_msg}", "GeoLinesQC", level=Qgis.Critical
-        )
-        self.iface.messageBar().pushMessage(
-            "Error", f"{task_name} failed: {error_msg}", level=Qgis.Critical
-        )
-
-    # TODO: remove
-    '''def segment_and_check_intersections(
-        self,
-        input_layer,
-        reference_layer,
-        segment_length: float,
-        buffer_distance: float,
-    ):
-        """
-        Segments features in the input layer, checks for intersections with the reference layer,
-        and creates an output memory layer with the results.
-
-        Parameters:
-        - input_layer: QgsVectorLayer
-            The input layer containing the features to segment.
-        - reference_layer: QgsVectorLayer
-            The layer against which intersections are checked.
-        - segment_length: float
-            The length of each segment to create from the input layer's features.
-        - buffer_distance: float
-            The buffer distance used to check for intersections.
-        """
-        # Create a new memory layer to store the segmented lines with intersection results
-        self.log_debug("Creating ouput memory layer...", show_in_bar=False)
-        output_layer = QgsVectorLayer(
-            "LineString?crs=" + input_layer.crs().authid(),
-            f"{layer1_name} — {layer2_name} {buffer_distance}",
-            "memory",
-        )
-        output_layer.dataProvider().addAttributes(
-            [
-                QgsField("id", QVariant.Int),
-                QgsField(
-                    "intersects", QVariant.Bool
-                ),  # Add a field to store intersection results
-            ]
-        )
-        output_layer.updateFields()
-        self.iface.messageBar().pushMessage(
-            "Info",
-            "Starting analysis...",
-            level=Qgis.Info,
-        )
-        QgsMessageLog.logMessage(
-            "Starting analysis...",
-            "GeoLinesQC",
-            level=Qgis.Info,
-        )
-        self.log_debug("Starting analysis...", show_in_bar=False)
-
-        # Initialize progress dialog
-        progress = QProgressDialog(
-            "Processing features...",
-            "Cancel",
-            0,
-            input_layer.featureCount(),
-            self.iface.mainWindow(),
-        )
-        progress.setWindowTitle("Analyzing Layers")
-        progress.setWindowModality(
-            Qt.WindowModal
-        )  # Make the dialog block the main window
-        progress.setMinimumDuration(0)  # Show the dialog immediately
-
-        # Segment each feature in the input layer
-        # segment_length = 100.0  # Desired segment length
-        # buffer_distance = 500.0  # Buffer distance for intersection check
-
-        QgsMessageLog.logMessage(
-            f"Buffer distance: {buffer_distance}, segment length={segment_length}",
-            "GeoLinesQC",
-            level=Qgis.Info,
-        )
-        nb_segments = 0
-
-        for i, feature in enumerate(input_layer.getFeatures()):
-            # Update progress bar
-            if i % 10 == 0:
-                progress.setValue(i)
-            if progress.wasCanceled():
-                self.iface.messageBar().pushMessage(
-                    "Warning",
-                    "Operation canceled by user.",
-                    level=Qgis.Warning,
-                )
-                break
-            line_geometry = feature.geometry()
-            segments = self.segment_line(line_geometry, segment_length)
-            summary = f"Feature {i} has {len(segments)} segments"
-            self.log_debug(summary)
-
-            # Add each segment to the output layer with intersection results
-            for segment in segments:
-                nb_segments += 1
-                new_feature = QgsFeature(output_layer.fields())
-                new_feature.setGeometry(segment)
-
-                # Check for intersections with the reference layer
-                intersects = self.buffer_and_check_intersections(
-                    segment, reference_layer, buffer_distance
-                )
-                new_feature.setAttribute("intersects", intersects)
-
-                output_layer.dataProvider().addFeature(new_feature)
-
-  
-        # Close the progress dialog
-        progress.setValue(input_layer.featureCount())
-        self.iface.messageBar().pushMessage(
-            "Success",
-            f"Segmentation and intersection check complete (n={nb_segments}. Output layer added to the map.",
-            level=Qgis.Success,
-        )
-        # Load style and add to map
-        self.add_styled_layer(output_layer, "intersects")
-
-        self.dialog.close()'''
+        if exception:
+            self.iface.messageBar().pushCritical(
+                "Task Error",
+                f"The {task_name} task encountered an error: {exception}",
+            )
+        else:
+            self.iface.messageBar().pushWarning(
+                "Task Cancelled", f"The {task_name} task was cancelled"
+            )
 
     def add_styled_layer(self, layer, style_name):
         """
@@ -898,198 +755,3 @@ class GeolinesQCPlugin:
 
         with open(log_file, "a") as f:
             f.write(f"{timestamp}: {message}\n")
-
-    # TODO: moved to task
-    '''def segment_line(self, line, segment_length):
-        """
-        Splits a line into segments of equal length using QGIS native functions.
-        Handles both single LineString and MultiLineString geometries.
-
-        Args:
-            line (QgsGeometry): The input line geometry (can be LineString or MultiLineString).
-            segment_length (float): The desired length of each segment.
-        Returns:
-            list: A list of QgsGeometry objects representing the segments.
-        """
-        try:
-            new_segments = []
-
-            # Check geometry type
-            geom_type = line.wkbType()
-            # self.log_debug(
-            #    f"Processing geometry type: {QgsWkbTypes.displayString(geom_type)}"
-            # )
-
-            # Handle MultiLineString
-            if QgsWkbTypes.isMultiType(geom_type):
-                # self.log_debug("Processing MultiLineString geometry")
-                for part in line.asGeometryCollection():
-                    # self.log_debug(f"Processing part with length: {part.length()}")
-                    segments = self.segment_single_line(part, segment_length)
-                    new_segments.extend(segments)
-            # Handle single LineString
-            else:
-                # self.log_debug("Processing single LineString geometry")
-                new_segments = self.segment_single_line(line, segment_length)
-
-            summary = f"\nTotal segments created: {len(new_segments)}"
-            for idx, seg in enumerate(new_segments):
-                summary += f"\nSegment {idx} length: {seg.length()}"
-            # self.log_debug(summary)
-
-            return new_segments
-
-        except Exception as e:
-            import traceback
-
-            error_msg = f"Error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
-            self.log_debug(error_msg, show_in_bar=True)
-            return [line]'''
-
-    # TODO: moved to task
-    '''def segment_single_line(self, line, segment_length):
-        """
-        Splits a single LineString geometry into segments.
-
-        Args:
-            line (QgsGeometry): The input LineString geometry.
-            segment_length (float): The desired length of each segment.
-        Returns:
-            list: A list of QgsGeometry objects representing the segments.
-        """
-        try:
-            # Debug: Log input parameters
-            # self.log_debug(f"Input line length: {line.length()}")
-            # self.log_debug(f"Requested segment length: {segment_length}")
-
-            # Extract vertices from the line
-            vertices = line.asPolyline()
-            # self.log_debug(f"Number of vertices in input line: {len(vertices)}")
-
-            if len(vertices) < 2:
-                # msg = "Invalid line: Not enough vertices."
-                # self.log_debug(msg, show_in_bar=True)
-                return [line]
-
-            new_segments = []
-            current_segment = [QgsPoint(vertices[0])]
-            accumulated_length = 0.0
-
-            for i in range(1, len(vertices)):
-                prev_point = QgsPoint(vertices[i - 1])
-                current_point = QgsPoint(vertices[i])
-                segment = QgsGeometry.fromPolyline([prev_point, current_point])
-                segment_length_current = segment.length()
-
-                # self.log_debug(f"Processing vertex {i}:")
-                # self.log_debug(f"Current segment length: {segment_length_current}")
-                # self.log_debug(
-                #     f"Accumulated length before processing: {accumulated_length}"
-                # )
-
-                while accumulated_length + segment_length_current >= segment_length:
-                    remaining_length = segment_length - accumulated_length
-                    # self.log_debug(
-                    #    f"Splitting segment - Remaining length: {remaining_length}"
-                    # )
-
-                    if remaining_length <= 0:
-                        # self.log_debug(
-                        #    "Warning: Remaining length is zero or negative",
-                        #    show_in_bar=True,
-                        # )
-                        break
-
-                    if remaining_length >= segment_length_current:
-                        # self.log_debug(
-                        #    "Warning: Remaining length exceeds current segment length",
-                        #    show_in_bar=True,
-                        # )
-                        break
-
-                    cut_point = segment.interpolate(remaining_length).asPoint()
-                    # self.log_debug(
-                    #    f"Cut point created at: ({cut_point.x()}, {cut_point.y()})"
-                    # )
-
-                    current_segment.append(QgsPoint(cut_point))
-                    new_segment = QgsGeometry.fromPolyline(current_segment)
-                    # self.log_debug(f"New segment length: {new_segment.length()}")
-                    new_segments.append(new_segment)
-
-                    current_segment = [QgsPoint(cut_point)]
-                    accumulated_length = 0.0
-
-                    segment = QgsGeometry.fromPolyline(
-                        [QgsPoint(cut_point), current_point]
-                    )
-                    segment_length_current = segment.length()
-                    # self.log_debug(
-                    #    f"Remaining segment length after cut: {segment_length_current}"
-                    # )
-
-                current_segment.append(current_point)
-                accumulated_length += segment_length_current
-                # self.log_debug(
-                #    f"Accumulated length after processing: {accumulated_length}"
-                # )
-
-            # Add the last segment if it has more than one point
-            if len(current_segment) > 1:
-                final_segment = QgsGeometry.fromPolyline(current_segment)
-                # self.log_debug(
-                #    f"Adding final segment with length: {final_segment.length()}"
-                # )
-                new_segments.append(final_segment)
-
-            return new_segments
-
-        except Exception as e:
-            import traceback
-
-            error_msg = f"Error in segment_single_line: {str(e)}\nTraceback:\n{traceback.format_exc()}"
-            self.log_debug(error_msg, show_in_bar=True)
-            return [line]'''
-
-    # TODO: moved to task
-    '''def buffer_and_check_intersections(self, segment, reference_layer, buffer_distance):
-        """
-        Buffers a segment and checks if it intersects with any features in a reference layer.
-
-        Args:
-            segment (QgsGeometry): The segment to buffer.
-            reference_layer (QgsVectorLayer): The reference layer to check for intersections.
-            buffer_distance (float): The buffer distance.
-
-        Returns:
-            bool: True if the buffer intersects any features in the reference layer, False otherwise.
-        """
-        self.iface.messageBar().pushMessage(
-            "Info", "Starting analysis...", level=Qgis.Info
-        )
-
-        try:
-            # Create a buffer around the segment
-            segment_buffer = segment.buffer(
-                buffer_distance, 5
-            )  # 5 is the number of segments to approximate the buffer
-
-            # Create a spatial index for the reference layer
-            spatial_index = QgsSpatialIndex(reference_layer.getFeatures())
-
-            # Find features in the reference layer that intersect with the buffer's bounding box
-            candidate_ids = spatial_index.intersects(segment_buffer.boundingBox())
-
-            # Check for actual intersections with the candidate features
-            for feature_id in candidate_ids:
-                feature = reference_layer.getFeature(feature_id)
-                reference_geometry = feature.geometry()
-                if segment_buffer.intersects(reference_geometry):
-                    return True  # Intersection found
-
-            return False  # No intersection found
-
-        except Exception as e:
-            print(f"Error: {e}")
-            self.iface.messageBar().pushMessage("Error", str(e), level=Qgis.Critical)
-            return False'''
