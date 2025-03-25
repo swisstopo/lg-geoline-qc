@@ -4,15 +4,7 @@
 import os
 from datetime import datetime
 
-from qgis import processing
-from qgis.core import (
-    Qgis,
-    QgsApplication,
-    QgsMessageLog,
-    QgsProcessingFeatureSourceDefinition,
-    QgsProject,
-    QgsVectorLayer,
-)
+from qgis.core import Qgis, QgsApplication, QgsMessageLog, QgsProject
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
@@ -27,14 +19,6 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
-from GeoLinesQC.errors import ClipError
-
-"""from GeoLinesQC.tasks import (
-    ClipLayerTask,
-    ExtractionTask,
-    GeoLinesProcessingTask,
-    SegmentAndCheckTask,
-)"""
 from GeoLinesQC.tasks import GeoLinesProcessingTask
 from GeoLinesQC.utils import create_spatial_index
 
@@ -335,10 +319,10 @@ class GeolinesQCPlugin:
         else:
             # Get mask layer
             region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
-            self.iface.messageBar().pushMessage(
-                "Info", "Clipping data...", level=Qgis.Info
+
+            self.log_debug(
+                f"Clipping data with {region_layer.name()}...", show_in_bar=False
             )
-            self.log_debug("Clipping data...", show_in_bar=False)
 
             # TODO reactivate
             # Start the clipping process
@@ -375,12 +359,12 @@ class GeolinesQCPlugin:
         # Connect signals
         task.taskCompleted.connect(lambda: on_task_completed(task))
         task.taskTerminated.connect(
-            lambda: self.handle_task_error("GeoLines processing", task.exception)
+            lambda: handle_task_error("GeoLines processing", task.exception)
         )
 
         # Create progress dialog
         progress = QProgressDialog(
-            "Processing lines...", "Cancel", 0, 100, self.iface.mainWindow()
+            "Processing geolines...", "Cancel", 0, 100, self.iface.mainWindow()
         )
         progress.setWindowModality(Qt.WindowModal)
         progress.canceled.connect(task.cancel)
@@ -397,6 +381,19 @@ class GeolinesQCPlugin:
             except RuntimeError:
                 # The task has been deleted
                 timer.stop()
+
+        def handle_task_error(task_name, exception):
+            timer.stop()  # Stop the progress timer
+
+            if exception:
+                self.iface.messageBar().pushCritical(
+                    "Task Error",
+                    f"The {task_name} task encountered an error: {exception}",
+                )
+            else:
+                self.iface.messageBar().pushWarning(
+                    "Task Cancelled", f"The {task_name} task was cancelled"
+                )
 
         def on_task_completed(task):
             timer.stop()  # Stop the progress timer
@@ -688,7 +685,7 @@ class GeolinesQCPlugin:
         QgsApplication.taskManager().addTask(task)
         progress.show()'''
 
-    def handle_task_error(self, task_name, exception):
+    """def handle_task_error(self, task_name, exception):
         timer.stop()  # Stop the progress timer
 
         if exception:
@@ -699,7 +696,7 @@ class GeolinesQCPlugin:
         else:
             self.iface.messageBar().pushWarning(
                 "Task Cancelled", f"The {task_name} task was cancelled"
-            )
+            )"""
 
     def add_styled_layer(self, layer, style_name):
         """

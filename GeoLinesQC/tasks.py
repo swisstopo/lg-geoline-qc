@@ -21,11 +21,8 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QVariant
 
 
-
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
 ADD_INTERMEDIATE_LAYERS_TO_MAP = True
-
-
 
 
 class GeoLinesProcessingTask(QgsTask):
