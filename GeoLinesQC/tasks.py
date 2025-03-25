@@ -17,8 +17,11 @@ from qgis.core import (
     QgsVectorLayer,
     QgsWkbTypes,
     QgsFeatureRequest,
+    edit,
 )
 from qgis.PyQt.QtCore import QVariant
+
+from GeoLinesQC.logger import log_message
 
 
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
@@ -34,7 +37,7 @@ class GeoLinesProcessingTask(QgsTask):
         input_layer,
         reference_layer=None,
         buffer_distance=None,
-        split_length=None,
+        split_length=100,
         output_name="Result",
         output_field_name="has_nearby",
         run_distance_check=True,
@@ -79,7 +82,7 @@ class GeoLinesProcessingTask(QgsTask):
         with open(log_file, "a") as f:
             f.write(f"{timestamp}: {message}\n")
 
-    def _split_lines(self, input_layer):
+    def _split_lines2(self, input_layer):
         """Split lines into segments of specified length"""
         params = {
             "INPUT": input_layer,
@@ -95,11 +98,32 @@ class GeoLinesProcessingTask(QgsTask):
 
     def _clip_with_mask(self, input_layer):
         """Clip input layer with mask polygon"""
-        params = {"INPUT": input_layer, "OVERLAY": self.mask_layer, "OUTPUT": "memory:"}
+        params = {
+            "INPUT": input_layer,
+            "OVERLAY": self.mask_layer,
+            "OUTPUT": "TEMPORARY_OUTPUT",
+        }
 
         result = processing.run("native:clip", params, feedback=self.feedback)
 
         return result["OUTPUT"]
+
+    def _split_lines(self, input_layer):
+        """Alternative version using 'native:renumberfeaturesid'"""
+        # First split the lines
+        split_result = processing.run(
+            "native:splitlinesbylength",
+            {
+                "INPUT": input_layer,
+                "LENGTH": self.split_length,
+                "OUTPUT": "TEMPORARY_OUTPUT",
+            },
+            feedback=self.feedback,
+        )
+
+        split_layer = split_result["OUTPUT"]
+
+        return split_layer
 
     def _check_nearby_lines(self, input_layer):
         """Check for nearby lines in reference layer and set attribute"""
@@ -118,6 +142,8 @@ class GeoLinesProcessingTask(QgsTask):
 
         # Prepare for editing
         output_layer.startEditing()
+
+        # log_message(f"Layer has {len(output_layer.getFeatures())} features", level=Qgis.Info)
 
         # Process each feature
         for feature in output_layer.getFeatures():
@@ -162,18 +188,20 @@ class GeoLinesProcessingTask(QgsTask):
 
         try:
             current_layer = self.input_layer
+            input_layer_name = current_layer.name()
 
             # Step 1: Split lines if requested
             self.log_debug(f"STEP 1. Split {current_layer} by length...")
 
             if self.run_line_split and self.split_length:
+                log_message(f"Splitting layer by{self.split_length} m", level=Qgis.Info)
                 self.setProgress(10)
                 self.feedback.setProgress(10)
 
                 if self.isCanceled():
                     return False
 
-                split_result = processing.run(
+                """ split_result = processing.run(
                     "native:splitlinesbylength",
                     {
                         "INPUT": current_layer,
@@ -183,11 +211,13 @@ class GeoLinesProcessingTask(QgsTask):
                     feedback=self.feedback,
                 )
 
-                current_layer = split_result["OUTPUT"]
+                current_layer = split_result["OUTPUT"]"""
+                current_layer = self._split_lines(current_layer)
                 self.result_message += (
                     f"Lines split into segments of {self.split_length} units. "
                 )
                 if current_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+                    current_layer.setName(f"Split {input_layer_name}")
                     QgsProject.instance().addMapLayer(current_layer)
 
                 self.log_debug(

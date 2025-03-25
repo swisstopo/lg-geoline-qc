@@ -364,7 +364,11 @@ class GeolinesQCPlugin:
 
         # Create progress dialog
         progress = QProgressDialog(
-            "Processing geolines...", "Cancel", 0, 100, self.iface.mainWindow()
+            f"Processing geolines with buffer {buffer_distance}m...",
+            "Cancel",
+            0,
+            100,
+            self.iface.mainWindow(),
         )
         progress.setWindowModality(Qt.WindowModal)
         progress.canceled.connect(task.cancel)
