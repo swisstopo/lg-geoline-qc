@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import processing
 
 from qgis.core import (
     Qgis,
@@ -10,38 +11,21 @@ from qgis.core import (
     QgsMessageLog,
     QgsPoint,
     QgsProcessingFeedback,
-    QgsProcessingUtils,
-    QgsProcessingContext,
     QgsProject,
     QgsSpatialIndex,
     QgsTask,
     QgsVectorLayer,
     QgsWkbTypes,
+    QgsFeatureRequest,
 )
 from qgis.PyQt.QtCore import QVariant
 
-from GeoLinesQC.errors import ClipError, IntersectError
 
 
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
 ADD_INTERMEDIATE_LAYERS_TO_MAP = True
 
 
-# New moonster task
-
-from qgis.core import (
-    QgsTask,
-    QgsProcessingFeedback,
-    QgsVectorLayer,
-    QgsSpatialIndex,
-    QgsFeatureRequest,
-    QgsGeometry,
-    QgsWkbTypes,
-    QgsField,
-    QgsProject,
-)
-from qgis.PyQt.QtCore import QVariant
-import processing
 
 
 class GeoLinesProcessingTask(QgsTask):
