@@ -483,7 +483,7 @@ class GeolinesQCPlugin:
                 # Start final step
                 self.start_final_step(
                     input_layer,
-                    reference_layer_extracted,
+                    extract_task.reference_layer, # TODOreference_layer_extracted,
                     segment_length,
                     buffer_distance,
                 )
@@ -573,7 +573,7 @@ class GeolinesQCPlugin:
                 timer.stop()
 
         def on_task_completed(task):
-            timer.stop()  # Stop the progress timer
+            # timer.stop()  # Stop the progress timer  # TODO clean exit
             progress.close()
 
             if task.output_layer:

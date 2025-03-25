@@ -115,8 +115,28 @@ class GeoLinesProcessingTask(QgsTask):
                 self.result_message += (
                     f"Lines split into segments of {self.split_length} units. "
                 )
-                if current_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
-                    QgsProject.instance().addMapLayer(current_layer)
+
+                if split_result["OUTPUT"] and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+                    # Get the temporary layer from processing
+                    # Get the layer properly based on its type
+                    if isinstance(split_result['OUTPUT'], str):
+                        temp_layer = QgsProcessingUtils.mapLayerFromString(
+                            split_result['OUTPUT'],
+                            QgsProcessingContext()
+                        )
+                    else:
+                        temp_layer = split_result['OUTPUT']
+
+                    # Create a duplicate with custom name
+                    custom_named_layer = QgsVectorLayer(
+                        temp_layer.source(),
+                        "Split Lines Result",  # Your custom name
+                        temp_layer.providerType()
+                    )
+
+                    # Add to map
+                    QgsProject.instance().addMapLayer(custom_named_layer)
+
                 QgsMessageLog.logMessage(f"Lines split into segments of {self.split_length} units. ", "GeoLinesQC", level=Qgis.Info)
 
                 self.setProgress(50)
@@ -215,6 +235,10 @@ class GeoLinesProcessingTask(QgsTask):
                 else:
                     intersect_layer = intersect_result["OUTPUT"]
                 QgsMessageLog.logMessage("Error...", "GeoLinesQC", level=Qgis.Info)
+                if intersect_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+
+                    intersect_layer.setName("Intersect layer")
+                    QgsProject.instance().addMapLayer(intersect_layer)
 
                 self.log_debug("Before 'has_intersection")
                 has_intersections = set()
