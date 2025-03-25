@@ -26,8 +26,363 @@ from GeoLinesQC.errors import ClipError, IntersectError
 PROCESS_SEGMENTS = False  # Check if buffered segments intersect features
 ADD_INTERMEDIATE_LAYERS_TO_MAP = True
 
-# New monster task
+
+# New moonster task
+
+from qgis.core import (
+    QgsTask,
+    QgsProcessingFeedback,
+    QgsVectorLayer,
+    QgsSpatialIndex,
+    QgsFeatureRequest,
+    QgsGeometry,
+    QgsWkbTypes,
+    QgsField,
+    QgsProject,
+)
+from qgis.PyQt.QtCore import QVariant
+import processing
+
+
 class GeoLinesProcessingTask(QgsTask):
+    """Task for processing line features with distance checking and line splitting"""
+
+    def __init__(
+        self,
+        description,
+        input_layer,
+        reference_layer=None,
+        buffer_distance=None,
+        split_length=None,
+        output_name=None,
+        output_field_name="has_nearby",
+        run_distance_check=True,
+        run_line_split=True,
+    ):
+        super().__init__(description, QgsTask.CanCancel)
+        self.input_layer = input_layer
+        self.reference_layer = reference_layer
+        self.buffer_distance = buffer_distance
+        self.split_length = split_length
+        self.output_name = output_name
+        self.output_field_name = output_field_name
+        self.run_distance_check = run_distance_check
+        self.run_line_split = run_line_split
+
+        # Results
+        self.output_layer = None
+        self.exception = None
+        self.feedback = QgsProcessingFeedback()
+        self.result_message = ""
+
+    def log_debug(self, message, level=Qgis.Info):
+        """Unified logging function that writes to both log file and QGIS log"""
+        # Log to QGIS Message Log
+        QgsMessageLog.logMessage(message, "GeoLinesQC", level=level)
+
+        # Log to file
+
+        # Get the path to the QGIS user profile directory
+        profile_path = QgsApplication.qgisSettingsDirPath()
+
+        # Construct the path to your plugin's logs directory
+        log_dir = os.path.join(profile_path, "python", "plugins", "GeoLinesQC", "logs")
+
+        # log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+
+        log_file = os.path.join(log_dir, "debug.log")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with open(log_file, "a") as f:
+            f.write(f"{timestamp}: {message}\n")
+
+    def _split_lines(self, input_layer):
+        """Split lines into segments of specified length"""
+        params = {
+            "INPUT": input_layer,
+            "LENGTH": self.split_length,
+            "OUTPUT": "memory:",
+        }
+
+        result = processing.run(
+            "native:splitlinesbylength", params, feedback=self.feedback
+        )
+
+        return result["OUTPUT"]
+
+    def _clip_with_mask(self, input_layer):
+        """Clip input layer with mask polygon"""
+        params = {"INPUT": input_layer, "OVERLAY": self.mask_layer, "OUTPUT": "memory:"}
+
+        result = processing.run("native:clip", params, feedback=self.feedback)
+
+        return result["OUTPUT"]
+
+    def _check_nearby_lines(self, input_layer):
+        """Check for nearby lines in reference layer and set attribute"""
+        # Create a copy of the input layer to modify
+        output_layer = input_layer.materialize(QgsFeatureRequest())
+
+        # Add the has_nearby field if it doesn't exist
+        provider = output_layer.dataProvider()
+        fields = provider.fields()
+        if fields.indexOf(self.output_field_name) == -1:
+            provider.addAttributes([QgsField(self.output_field_name, QVariant.Bool)])
+            output_layer.updateFields()
+
+        # Create spatial index for reference layer
+        reference_index = QgsSpatialIndex(self.reference_layer.getFeatures())
+
+        # Prepare for editing
+        output_layer.startEditing()
+
+        # Process each feature
+        for feature in output_layer.getFeatures():
+            if self.isCanceled():
+                output_layer.rollBack()
+                return None
+
+            # Create buffer around the feature
+            geometry = feature.geometry()
+            buffer = geometry.buffer(self.buffer_distance, 5)
+
+            # Find reference features that intersect with the buffer
+            nearby_ids = reference_index.intersects(buffer.boundingBox())
+
+            has_nearby = False
+            for ref_id in nearby_ids:
+                ref_feature = self.reference_layer.getFeature(ref_id)
+                if buffer.intersects(ref_feature.geometry()):
+                    has_nearby = True
+                    break
+
+            # Set the attribute
+            field_idx = output_layer.fields().indexOf(self.output_field_name)
+            output_layer.changeAttributeValue(feature.id(), field_idx, has_nearby)
+
+            # Update progress
+            self.setProgress(40 + (40 * feature.id() / output_layer.featureCount()))
+            self.feedback.setProgress(
+                40 + (40 * feature.id() / output_layer.featureCount())
+            )
+
+        output_layer.commitChanges()
+        return output_layer
+
+    def run(self):
+        """Run the processing operations in the background"""
+        import processing
+        from processing.core.Processing import Processing
+
+        # Initialize processing in this thread
+        Processing.initialize()
+
+        try:
+            current_layer = self.input_layer
+
+            # Step 1: Split lines if requested
+            self.log_debug(f"STEP 1. Split {current_layer} by length...")
+
+            if self.run_line_split and self.split_length:
+                self.setProgress(10)
+                self.feedback.setProgress(10)
+
+                if self.isCanceled():
+                    return False
+
+                split_result = processing.run(
+                    "native:splitlinesbylength",
+                    {
+                        "INPUT": current_layer,
+                        "LENGTH": self.split_length,
+                        "OUTPUT": "TEMPORARY_OUTPUT",
+                    },
+                    feedback=self.feedback,
+                )
+
+                current_layer = split_result["OUTPUT"]
+                self.result_message += (
+                    f"Lines split into segments of {self.split_length} units. "
+                )
+                if current_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+                    QgsProject.instance().addMapLayer(current_layer)
+
+                self.log_debug(
+                    f"Lines split into segments of {self.split_length} units. "
+                )
+
+                self.setProgress(50)
+                self.feedback.setProgress(50)
+
+            # Step 2: Check for features within distance if requested
+            self.log_debug("STEP 2. Check within distance..", level=Qgis.Info)
+            if (
+                self.run_distance_check
+                and self.reference_layer
+                and self.buffer_distance
+            ):
+                self.setProgress(60)
+                self.feedback.setProgress(60)
+
+                if self.isCanceled():
+                    return False
+
+                # Create a memory layer to store the results
+                if isinstance(current_layer, str):
+                    # If current_layer is a string (layer path), load it
+                    current_layer = QgsProcessingUtils.mapLayerFromString(
+                        current_layer, QgsProcessingContext()
+                    )
+
+                # Add the output field if it doesn't exist
+                field_index = current_layer.fields().indexFromName(
+                    self.output_field_name
+                )
+                if field_index == -1:
+                    provider = current_layer.dataProvider()
+                    provider.addAttributes(
+                        [QgsField(self.output_field_name, QVariant.Bool)]
+                    )
+                    current_layer.updateFields()
+                    field_index = current_layer.fields().indexFromName(
+                        self.output_field_name
+                    )
+
+                # Buffer the current layer
+                self.log_debug("STEP 2a. Buffering...", level=Qgis.Info)
+                buffered_result = processing.run(
+                    "native:buffer",
+                    {
+                        "INPUT": current_layer,
+                        "DISTANCE": self.buffer_distance,
+                        "SEGMENTS": 5,
+                        "END_CAP_STYLE": 0,  # Round
+                        "JOIN_STYLE": 0,  # Round
+                        "MITER_LIMIT": 2,
+                        "DISSOLVE": False,
+                        "OUTPUT": "TEMPORARY_OUTPUT",
+                    },
+                    feedback=self.feedback,
+                )
+
+                self.setProgress(70)
+                self.feedback.setProgress(70)
+
+                if self.isCanceled():
+                    return False
+
+                if buffered_result["OUTPUT"] and ADD_INTERMEDIATE_LAYERS_TO_MAP:
+                    QgsProject.instance().addMapLayer(buffered_result["OUTPUT"])
+
+                # Check for intersections
+                self.log_debug("STEP 2b. Join by location...", level=Qgis.Info)
+                intersect_result = processing.run(
+                    "native:joinattributesbylocation",
+                    {
+                        "INPUT": buffered_result["OUTPUT"],
+                        "JOIN": self.reference_layer,
+                        "PREDICATE": [0],  # Intersects
+                        "JOIN_FIELDS": [],
+                        "METHOD": 0,  # Create separate feature for each matching feature
+                        "DISCARD_NONMATCHING": False,
+                        "PREFIX": "",
+                        "OUTPUT": "TEMPORARY_OUTPUT",
+                    },
+                    feedback=self.feedback,
+                )
+
+                self.setProgress(80)
+                self.feedback.setProgress(80)
+
+                if self.isCanceled():
+                    return False
+
+                # Create a set of feature IDs that have intersections
+                self.log_debug("STEP 3. Check for intersection...", level=Qgis.Info)
+
+                if isinstance(current_layer, str):
+                    intersect_layer = QgsProcessingUtils.mapLayerFromString(
+                        intersect_result["OUTPUT"], QgsProcessingContext()
+                    )
+                else:
+                    intersect_layer = intersect_result["OUTPUT"]
+                self.log_debug("Error...", "GeoLinesQC", level=Qgis.Error)
+
+                self.log_debug("Before 'has_intersection")
+                has_intersections = set()
+                for feature in intersect_layer.getFeatures():
+                    orig_id = feature.id()
+                    has_intersections.add(orig_id)
+                self.log_debug("After 'has_intersection")
+
+                # Update the current layer with results
+                current_layer.startEditing()
+                for feature in current_layer.getFeatures():
+                    feature_id = feature.id()
+                    current_layer.changeAttributeValue(
+                        feature_id, field_index, feature_id in has_intersections
+                    )
+                self.log_debug("After 'changeAttribute")
+                current_layer.commitChanges()
+
+                self.result_message += f"Features checked for proximity within {self.buffer_distance} units. "
+
+                self.setProgress(90)
+                self.feedback.setProgress(90)
+
+            self.log_debug("Final output")
+            # Prepare final output
+
+            # Use the current layer as output
+            if isinstance(current_layer, str):
+                self.output_layer = QgsProcessingUtils.mapLayerFromString(
+                    current_layer, QgsProcessingContext()
+                )
+            else:
+                self.output_layer = current_layer
+
+            self.setProgress(100)
+            self.feedback.setProgress(100)
+            self.output_layer.setName("Result")
+            self.log_debug("Before return")
+            return True
+
+        except Exception as e:
+            self.exception = e
+            return False
+
+    def cancel(self):
+        """Cancel the task"""
+        self.feedback.cancel()
+        return super().cancel()
+
+    def finished(self, result):
+        """Handle the task completion"""
+        if result:
+            # Process completed successfully
+            QgsMessageLog.logMessage(
+                f"GeoLines task completed successfully. {self.result_message}",
+                "GeoLinesQC",
+                level=Qgis.Info,
+            )
+        else:
+            # Process failed
+            if self.exception:
+                QgsMessageLog.logMessage(
+                    f"GeoLines task failed: {self.exception}",
+                    "GeoLinesQC",
+                    level=Qgis.Critical,
+                )
+            else:
+                QgsMessageLog.logMessage(
+                    "GeoLines task was cancelled.", "GeoLinesQC", level=Qgis.Warning
+                )
+
+
+# New monster task
+class GeoLinesProcessingTask_previous(QgsTask):
     """Task for processing line features with distance checking and line splitting"""
 
     def __init__(
@@ -93,7 +448,11 @@ class GeoLinesProcessingTask(QgsTask):
             current_layer = self.input_layer
 
             # Step 1: Split lines if requested
-            QgsMessageLog.logMessage(f"STEP 1. Split {current_layer} by length...", "GeoLinesQC", level=Qgis.Info )
+            QgsMessageLog.logMessage(
+                f"STEP 1. Split {current_layer} by length...",
+                "GeoLinesQC",
+                level=Qgis.Info,
+            )
             if self.run_line_split and self.split_length:
                 self.setProgress(10)
                 self.feedback.setProgress(10)
@@ -117,13 +476,19 @@ class GeoLinesProcessingTask(QgsTask):
                 )
                 if current_layer and ADD_INTERMEDIATE_LAYERS_TO_MAP:
                     QgsProject.instance().addMapLayer(current_layer)
-                QgsMessageLog.logMessage(f"Lines split into segments of {self.split_length} units. ", "GeoLinesQC", level=Qgis.Info)
+                QgsMessageLog.logMessage(
+                    f"Lines split into segments of {self.split_length} units. ",
+                    "GeoLinesQC",
+                    level=Qgis.Info,
+                )
 
                 self.setProgress(50)
                 self.feedback.setProgress(50)
 
             # Step 2: Check for features within distance if requested
-            QgsMessageLog.logMessage("STEP 2. Check within distance...", "GeoLinesQC", level=Qgis.Info)
+            QgsMessageLog.logMessage(
+                "STEP 2. Check within distance...", "GeoLinesQC", level=Qgis.Info
+            )
             if (
                 self.run_distance_check
                 and self.reference_layer
@@ -157,7 +522,9 @@ class GeoLinesProcessingTask(QgsTask):
                     )
 
                 # Buffer the current layer
-                QgsMessageLog.logMessage("STEP 2a. Buffering...", "GeoLinesQC", level=Qgis.Info)
+                QgsMessageLog.logMessage(
+                    "STEP 2a. Buffering...", "GeoLinesQC", level=Qgis.Info
+                )
                 buffered_result = processing.run(
                     "native:buffer",
                     {
@@ -180,10 +547,12 @@ class GeoLinesProcessingTask(QgsTask):
                     return False
 
                 if buffered_result["OUTPUT"] and ADD_INTERMEDIATE_LAYERS_TO_MAP:
-                        QgsProject.instance().addMapLayer(buffered_result["OUTPUT"])
+                    QgsProject.instance().addMapLayer(buffered_result["OUTPUT"])
 
                 # Check for intersections
-                QgsMessageLog.logMessage("STEP 2b. Join by location...", "GeoLinesQC", level=Qgis.Info)
+                QgsMessageLog.logMessage(
+                    "STEP 2b. Join by location...", "GeoLinesQC", level=Qgis.Info
+                )
                 intersect_result = processing.run(
                     "native:joinattributesbylocation",
                     {
@@ -206,7 +575,9 @@ class GeoLinesProcessingTask(QgsTask):
                     return False
 
                 # Create a set of feature IDs that have intersections
-                QgsMessageLog.logMessage("STEP 3. Check for intersection...", "GeoLinesQC", level=Qgis.Info)
+                QgsMessageLog.logMessage(
+                    "STEP 3. Check for intersection...", "GeoLinesQC", level=Qgis.Info
+                )
 
                 if isinstance(current_layer, str):
                     intersect_layer = QgsProcessingUtils.mapLayerFromString(
@@ -240,7 +611,7 @@ class GeoLinesProcessingTask(QgsTask):
 
             self.log_debug("Final output")
             # Prepare final output
-            '''if self.output_name:
+            """if self.output_name:
                 # Save to the specified output
                 output_path = self.output_name
                 if not output_path.lower().endswith((".shp", ".gpkg", ".geojson")):
@@ -255,14 +626,14 @@ class GeoLinesProcessingTask(QgsTask):
                 self.output_layer = QgsProcessingUtils.mapLayerFromString(
                     save_result["OUTPUT"], QgsProcessingContext()
                 )
-            else:'''
+            else:"""
             # Use the current layer as output
             if isinstance(current_layer, str):
-                    self.output_layer = QgsProcessingUtils.mapLayerFromString(
-                        current_layer, QgsProcessingContext()
-                    )
+                self.output_layer = QgsProcessingUtils.mapLayerFromString(
+                    current_layer, QgsProcessingContext()
+                )
             else:
-                    self.output_layer = current_layer
+                self.output_layer = current_layer
 
             self.setProgress(100)
             self.feedback.setProgress(100)
