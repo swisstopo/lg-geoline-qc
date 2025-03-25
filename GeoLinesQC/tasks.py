@@ -223,7 +223,21 @@ class GeoLinesProcessingTask(QgsTask):
                 and self.reference_layer
                 and self.buffer_distance
             ):
-                self.setProgress(60)
+                # Step 3: Check for nearby lines in reference layer
+                current_layer = self._check_nearby_lines(current_layer)
+                if self.isCanceled():
+                    return False
+                self.setProgress(80)
+                self.feedback.setProgress(80)
+
+                # Finalize the output layer
+                current_layer.setName(self.output_name)
+                self.output_layer = current_layer
+
+                self.setProgress(100)
+                self.feedback.setProgress(100)
+                return True
+                """self.setProgress(60)
                 self.feedback.setProgress(60)
 
                 if self.isCanceled():
@@ -325,7 +339,7 @@ class GeoLinesProcessingTask(QgsTask):
                         feature_id, field_index, feature_id in has_intersections
                     )
                 self.log_debug("After 'changeAttribute")
-                current_layer.commitChanges()
+                current_layer.commitChanges()"""
 
                 self.result_message += f"Features checked for proximity within {self.buffer_distance} units. "
 
