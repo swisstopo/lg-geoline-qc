@@ -145,7 +145,14 @@ class GeoLinesProcessingTask(QgsTask):
             new_layer = QgsVectorLayer(uri, "renumbered", "memory")
 
             # Add fields from the source layer
-            new_layer.dataProvider().addAttributes(layer.fields())
+            new_fields = layer.fields().toList()
+
+            # Add a custom ID field if not exists
+            id_field = QgsField("oid", QVariant.Int)
+            new_fields.append(id_field)
+            new_layer.dataProvider().addAttributes(new_fields)
+
+            # new_layer.dataProvider().addAttributes(layer.fields())
             new_layer.updateFields()
 
             # Verify layer creation
@@ -170,8 +177,16 @@ class GeoLinesProcessingTask(QgsTask):
                 try:
                     new_feat = QgsFeature(new_layer.fields())
                     new_feat.setGeometry(feature.geometry())
-                    new_feat.setAttributes(feature.attributes())
-                    new_feat.setId(idx)
+
+                    # Copy original attributes
+                    attributes = list(feature.attributes())
+                    # Add custom ID
+                    attributes.append(idx)  # or any custom ID logic you prefer
+
+                    new_feat.setAttributes(attributes)
+                    new_layer.dataProvider().addFeature(new_feat)
+
+                    # new_feat.setAttributes(feature.attributes())
 
                     # Add feature
                     if new_layer.addFeature(new_feat):
