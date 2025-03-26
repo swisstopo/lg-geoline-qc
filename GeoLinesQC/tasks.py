@@ -82,35 +82,11 @@ class GeoLinesProcessingTask(QgsTask):
         with open(log_file, "a") as f:
             f.write(f"{timestamp}: {message}\n")
 
-    def _split_lines2(self, input_layer):
-        """Split lines into segments of specified length"""
-        params = {
-            "INPUT": input_layer,
-            "LENGTH": self.split_length,
-            "OUTPUT": "memory:",
-        }
-
-        result = processing.run(
-            "native:splitlinesbylength", params, feedback=self.feedback
-        )
-
-        return result["OUTPUT"]
-
-    def _clip_with_mask(self, input_layer):
-        """Clip input layer with mask polygon"""
-        params = {
-            "INPUT": input_layer,
-            "OVERLAY": self.mask_layer,
-            "OUTPUT": "TEMPORARY_OUTPUT",
-        }
-
-        result = processing.run("native:clip", params, feedback=self.feedback)
-
-        return result["OUTPUT"]
-
     def _split_lines(self, input_layer):
-        """Alternative version using 'native:renumberfeaturesid'"""
-        # First split the lines
+        """Split lines into segments of specified length"""
+        log_message(
+            f"Splitting layer in {self.split_length} meters segments", level=Qgis.Info
+        )
         split_result = processing.run(
             "native:splitlinesbylength",
             {
@@ -124,6 +100,146 @@ class GeoLinesProcessingTask(QgsTask):
         split_layer = split_result["OUTPUT"]
 
         return split_layer
+
+    def _clip_with_mask(self, input_layer):
+        """Clip input layer with mask polygon"""
+        params = {
+            "INPUT": input_layer,
+            "OVERLAY": self.mask_layer,
+            "OUTPUT": "TEMPORARY_OUTPUT",
+        }
+
+        result = processing.run("native:clip", params, feedback=self.feedback)
+
+        return result["OUTPUT"]
+
+    def _ensure_unique_fids(self, layer):
+        """Create a new memory layer with unique FIDs from the given layer."""
+        log_message(f"Starting renumbering for layer: {layer.name()}", level=Qgis.Info)
+
+        try:
+            geom_type_map = {
+                0: "None",
+                1: "Point",
+                2: "LineString",
+                3: "Polygon",
+                4: "MultiPoint",
+                5: "MultiLineString",
+                6: "MultiPolygon",
+            }
+            wkb_type = layer.wkbType()
+            geom_type_str = geom_type_map.get(wkb_type, "Unknown")
+
+            log_message(f"Source layer details:", level=Qgis.Info)
+            log_message(f"  - CRS: {layer.crs().authid()}", level=Qgis.Info)
+            log_message(
+                f"  - Geometry Type: {wkb_type} ({geom_type_str})", level=Qgis.Info
+            )
+            log_message(f"  - Feature Count: {layer.featureCount()}", level=Qgis.Info)
+            log_message(
+                f"  - Fields: {[f.name() for f in layer.fields()]}", level=Qgis.Info
+            )
+
+            # Correct layer creation syntax
+            uri = f"{geom_type_str}?crs={layer.crs().authid()}"
+            new_layer = QgsVectorLayer(uri, "renumbered", "memory")
+
+            # Add fields from the source layer
+            new_layer.dataProvider().addAttributes(layer.fields())
+            new_layer.updateFields()
+
+            # Verify layer creation
+            if not new_layer.isValid():
+                log_message("Failed to create new memory layer", level=Qgis.Critical)
+                return None
+
+            # Copy fields
+            provider = new_layer.dataProvider()
+            provider.addAttributes(layer.fields())
+            new_layer.updateFields()
+
+            # Start editing
+            new_layer.startEditing()
+
+            # Prepare to track feature addition
+            added_features_count = 0
+            failed_features = []
+
+            # Copy features with new FIDs
+            for idx, feature in enumerate(layer.getFeatures()):
+                try:
+                    new_feat = QgsFeature(new_layer.fields())
+                    new_feat.setGeometry(feature.geometry())
+                    new_feat.setAttributes(feature.attributes())
+                    new_feat.setId(idx)
+
+                    # Add feature
+                    if new_layer.addFeature(new_feat):
+                        added_features_count += 1
+                    else:
+                        failed_features.append(feature.id())
+                except Exception as feat_error:
+                    log_message(
+                        f"Error processing feature {feature.id()}: {feat_error}",
+                        level=Qgis.Warning,
+                    )
+                    failed_features.append(feature.id())
+
+            # Commit changes
+            if new_layer.commitChanges():
+                # Log success details
+                log_message(f"Renumbering complete:", level=Qgis.Info)
+                log_message(
+                    f"  - Total features added: {added_features_count}", level=Qgis.Info
+                )
+
+                if failed_features:
+                    log_message(
+                        f"  - Failed features: {failed_features}", level=Qgis.Warning
+                    )
+
+                # Verify the new layer
+                log_message(
+                    f"  - New layer feature count: {new_layer.featureCount()}",
+                    level=Qgis.Info,
+                )
+
+                # Additional validation
+                if new_layer.featureCount() == 0:
+                    log_message("WARNING: New layer is empty!", level=Qgis.Critical)
+            else:
+                log_message(
+                    "Failed to commit changes to the new layer", level=Qgis.Critical
+                )
+                return None
+
+            return new_layer
+
+        except Exception as e:
+            log_message(
+                f"Critical error in ensure_unique_fids: {e}", level=Qgis.Critical
+            )
+            return None
+
+    def _split_lines_and_renumber(self, input_layer):
+        """Alternative version using 'native:renumberfeaturesid'"""
+        # First split the lines
+        log_message(
+            f"Splitting layer in {self.split_length} meters segments", level=Qgis.Info
+        )
+        split_result = processing.run(
+            "native:splitlinesbylength",
+            {
+                "INPUT": input_layer,
+                "LENGTH": self.split_length,
+                "OUTPUT": "TEMPORARY_OUTPUT",
+            },
+            feedback=self.feedback,
+        )
+
+        split_layer = split_result["OUTPUT"]
+
+        return self._ensure_unique_fids(split_result["OUTPUT"])
 
     def _check_nearby_lines(self, input_layer):
         """Check for nearby lines in reference layer and set attribute"""
@@ -191,7 +307,7 @@ class GeoLinesProcessingTask(QgsTask):
             input_layer_name = current_layer.name()
 
             # Step 1: Split lines if requested
-            self.log_debug(f"STEP 1. Split {current_layer} by length...")
+            self.log_debug(f"STEP 1. Split {input_layer_name} by length...")
 
             if self.run_line_split and self.split_length:
                 log_message(f"Splitting layer by{self.split_length} m", level=Qgis.Info)
@@ -212,7 +328,8 @@ class GeoLinesProcessingTask(QgsTask):
                 )
 
                 current_layer = split_result["OUTPUT"]"""
-                current_layer = self._split_lines(current_layer)
+                # current_layer = self._split_lines(current_layer)
+                current_layer = self._split_lines_and_renumber(current_layer)
                 self.result_message += (
                     f"Lines split into segments of {self.split_length} units. "
                 )
@@ -234,6 +351,8 @@ class GeoLinesProcessingTask(QgsTask):
                 and self.reference_layer
                 and self.buffer_distance
             ):
+                if not current_layer:
+                    raise Exception
                 # Step 3: Check for nearby lines in reference layer
                 current_layer = self._check_nearby_lines(current_layer)
                 if self.isCanceled():
@@ -254,6 +373,7 @@ class GeoLinesProcessingTask(QgsTask):
 
         except Exception as e:
             self.exception = e
+            self.log_debug(f"Error in {self.description()}: {str(e)}", Qgis.Critical)
             return False
 
     def cancel(self):
