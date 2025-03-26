@@ -27,6 +27,9 @@ You will be automatically notified if new version is published.
 
 ![New version notification](assets/New-Version-Notification.png)
 
+C:\Users\U80795753\AppData\Roaming\QGIS\QGIS3\profiles\default\python\plugins
+
+
 ## Usage
 
 Open the Plugin from the Menu bar
