@@ -55,6 +55,9 @@ cover/
 *.mo
 *.pot
 
+# IDE
+.idea
+
 # Django stuff:
 *.log
 local_settings.py
@@ -126,6 +129,10 @@ celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
+
+
+# 
+GeoLinesQC/resources.py
 
 # Environments
 .env

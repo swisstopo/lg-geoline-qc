@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/GeoLinesQC">
+    <file>icons8-line-chart-50.png</file>
+  </qresource>
+</RCC>
