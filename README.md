@@ -6,9 +6,9 @@ QGis plugins to assess quality of digitalized geological lines boundaries agains
 
 ### From Zip archives
 
-To install this plugin, you can download the zip file from the [releases](https://github.com/procrastinatio/lg-geolines-qc/releases) page.
+To install this plugin, you can download the zip file from the [releases](https://github.com/swisstopo/lg-geoline-qc/releases) page.
 
-The direct download for the latest version at [here](https://github.com/procrastinatio/lg-geolines-qc/releases/latest).
+The direct download for the latest version at [here](https://github.com/swisstopo/lg-geolins-qc/releases/latest).
 
 Once downloaded, go to  `Plugins -> Install and Manage Plugins... -> Install from ZIP`  and select the file
 you just downloaded.
