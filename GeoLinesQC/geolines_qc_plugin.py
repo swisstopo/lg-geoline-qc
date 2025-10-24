@@ -12,17 +12,17 @@ from qgis.core import (
     QgsGeometry,
     QgsMessageLog,
     QgsPoint,
+    QgsProcessingFeatureSourceDefinition,
     QgsProject,
     QgsSpatialIndex,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsProcessingFeatureSourceDefinition,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
-    QApplication,
     QAction,
+    QApplication,
     QComboBox,
     QDialog,
     QLabel,
@@ -31,7 +31,6 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
-
 
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
@@ -83,63 +82,7 @@ class GeolinesQCPlugin:
         self.iface.removePluginMenu("&GeoLines QC", self.action)
         self.iface.removeToolBarIcon(self.action)
 
-    """def get_predefined_geometries(self):
-        # Load the GPGK file
-        gpkg_path = resolve("data/regions.gpkg")
-        layername = "regions"
-
-        if bool(self.predefined_geometries):
-            return self.predefined_geometries
-
-        try:
-            # Check if the file exists
-            if not os.path.exists(gpkg_path):
-                raise FileNotFoundError(f"The file '{gpkg_path}' does not exist.")
-
-            regions_layer = QgsVectorLayer(
-                gpkg_path + "|layername=" + layername, "regions", "ogr"
-            )
-
-            # Check if the layer is valid
-            if not regions_layer.isValid():
-                raise ValueError(
-                    f"Failed to load layer from '{gpkg_path}'. The file may be corrupt or unsupported."
-                )
-
-            # Check if the layer contains geometries
-            if regions_layer.featureCount() == 0:
-                raise ValueError(f"The layer '{layername}' contains no features.")
-
-        except FileNotFoundError as e:
-            self.iface.messageBar().pushMessage(
-                "File Not Found", str(e), level=Qgis.Critical
-            )
-
-        except ValueError as e:
-            self.iface.messageBar().pushMessage(
-                "Layer Error", str(e), level=Qgis.Critical
-            )
-        except Exception as e:
-            self.iface.messageBar().pushMessage(
-                "Unexpected Error",
-                f"An unexpected error occurred: {str(e)}",
-                level=Qgis.Critical,
-            )
-
-        # Store geometries in a dictionary
-
-        for feature in regions_layer.getFeatures():
-            name = feature["name"]
-            geometry = feature.geometry()
-            self.predefined_geometries[name] = geometry
-
-        return self.predefined_geometries"""
-
-    """def get_selected_geometry(self):
-        selected_name = self.geometry_combo.currentText()
-        if selected_name != "None":
-            return self.get_predefined_geometries()[selected_name]
-        return None"""
+    
 
     def run(self):
         # Create and show the dialog
@@ -262,9 +205,9 @@ class GeolinesQCPlugin:
         # Get selected layers
         # TODO check validiy
 
-        layer1_name = self.layer1_combo.currentText()
-        layer2_name = self.layer2_combo.currentText()
-        mask_layer_name = self.geometry_combo.currentText()
+        layer1_id = self.layer1_combo.currentData()
+        layer2_id = self.layer2_combo.currentData()
+        mask_layer_id = self.geometry_combo.currentData()
         buffer_distance = (
             float(self.threshold_input.text())
             if self.threshold_input.text()
@@ -283,23 +226,17 @@ class GeolinesQCPlugin:
             level=Qgis.Info,
         )
 
-        input_layer_full = QgsProject.instance().mapLayersByName(layer1_name)[0]
-        reference_layer_full = QgsProject.instance().mapLayersByName(layer2_name)[0]
+        input_layer_full = QgsProject.instance().mapLayer(layer1_id)
+        reference_layer_full = QgsProject.instance().mapLayer(layer2_id)
+        layer1_name = input_layer_full.name()
+        layer2_name = reference_layer_full.name()
 
         # Get the selected region layer
         """region_geometry = (
             self.get_selected_geometry()
         )  # Assuming this returns a QgsVectorLayer"""
 
-        if mask_layer_name == "None":
-            self.iface.messageBar().pushMessage(
-                "Info",
-                "No region selected. Using the full dataset",
-                level=Qgis.Info,
-            )
-            input_layer = input_layer_full
-            reference_layer = reference_layer_full
-        else:
+        if mask_layer_id and mask_layer_id != "None":
             self.iface.messageBar().pushMessage(
                 "Info",
                 "Clipping data...",
@@ -307,7 +244,7 @@ class GeolinesQCPlugin:
             )
             # Convert the region geometry to a vector layer
             # region_layer = geometry_to_vector_layer(region_geometry, "Selected Region")
-            region_layer = QgsProject.instance().mapLayersByName(mask_layer_name)[0]
+            region_layer = QgsProject.instance().mapLayer(mask_layer_id)
             # Clip layer1 to the selected region
             try:
                 input_layer = self.clip_layer_with_processing(
@@ -347,6 +284,14 @@ class GeolinesQCPlugin:
                 )
             if ADD_CLIPPED_LAYER_TO_MAP and reference_layer:
                 QgsProject.instance().addMapLayer(reference_layer)
+        else:  # No regional mask
+            self.iface.messageBar().pushMessage(
+                "Info",
+                "No region selected. Using the full dataset",
+                level=Qgis.Info,
+            )
+            input_layer = input_layer_full
+            reference_layer = reference_layer_full
 
         # Create a new memory layer to store the segmented lines with intersection results
         output_layer = QgsVectorLayer(
