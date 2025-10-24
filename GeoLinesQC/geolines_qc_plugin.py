@@ -33,7 +33,6 @@ from qgis.PyQt.QtWidgets import (
 )
 
 
-
 DEFAULT_BUFFER = 500.0
 DEFAULT_SEGMENT_LENGTH = 200.0
 
@@ -41,7 +40,7 @@ ADD_CLIPPED_LAYER_TO_MAP = False
 DIALOG_WIDTH = 400
 
 # Enable high DPI scaling
-if hasattr(QApplication, 'setAttribute'):
+if hasattr(QApplication, "setAttribute"):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
@@ -178,17 +177,25 @@ class GeolinesQCPlugin:
         layout.addWidget(QLabel("Region layer:"))
         layout.addWidget(self.geometry_combo)
 
-        layers = QgsProject.instance().layerTreeRoot().children()
+        layers = [
+            layer
+            for layer in QgsProject.instance().mapLayers().values()
+            if isinstance(layer, QgsVectorLayer)
+        ]
+
         self.layer1_combo.clear()
-        self.layer1_combo.addItems([layer.name() for layer in layers])
+        for layer in layers:
+            self.layer1_combo.addItem(layer.name(), layer.id())
 
         self.layer2_combo.clear()
-        self.layer2_combo.addItems([layer.name() for layer in layers])
+        for layer in layers:
+            self.layer2_combo.addItem(layer.name(), layer.id())
 
         # Add a dropdown for predefined geometries
         self.geometry_combo.clear()
         self.geometry_combo.addItem("None")
-        self.geometry_combo.addItems([layer.name() for layer in layers])
+        for layer in layers:
+            self.geometry_combo.addItem(layer.name(), layer.id())
 
         # Add a button to run the analysis
         self.run_button = QPushButton("Run Analysis")
