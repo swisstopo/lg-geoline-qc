@@ -27,6 +27,7 @@ from qgis.PyQt.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QMessageBox,
+    QProgressDialog,
 )
 
 
@@ -38,7 +39,7 @@ class QCAnalysisTask(QgsTask):
     """Background task for running the QC analysis"""
     
     # Signals for progress updates
-    progressUpdated = pyqtSignal(str, int)
+    progressChanged = pyqtSignal(str, int)  # message, progress value
     analysisComplete = pyqtSignal(object)  # Will emit the result layer
     analysisError = pyqtSignal(str)
     
@@ -53,19 +54,26 @@ class QCAnalysisTask(QgsTask):
         self.result_layer = None
         self.exception = None
         
+    def log(self, message, progress=None):
+        """Log message to both QGIS log and emit signal for progress dialog"""
+        QgsMessageLog.logMessage(message, "GeoLinesQC", Qgis.Info)
+        if progress is not None:
+            self.progressChanged.emit(message, progress)
+            self.setProgress(progress)
+        
     def run(self):
         """Execute the analysis in background"""
         try:
+            self.log("Starting GeoLines QC analysis...", 0)
+            
             # Step 1: Clip layers if region is provided
-            self.setProgress(10)
-            if self.isCanceled():
-                return False
-                
             working_input = self.input_layer
             working_reference = self.reference_layer
             
             if self.region_layer:
-                QgsMessageLog.logMessage("Clipping layers to region...", "GeoLinesQC", Qgis.Info)
+                self.log("Clipping input layer to region...", 10)
+                if self.isCanceled():
+                    return False
                 
                 # Clip input layer
                 clip_params = {
@@ -76,21 +84,31 @@ class QCAnalysisTask(QgsTask):
                 clip_result = processing.run("native:clip", clip_params)
                 working_input = clip_result['OUTPUT']
                 
+                input_count = working_input.featureCount()
+                self.log(f"Input layer clipped: {input_count} features", 20)
+                
                 if self.isCanceled():
                     return False
                     
                 # Clip reference layer
+                self.log("Clipping reference layer to region...", 25)
                 clip_params['INPUT'] = self.reference_layer
                 clip_result = processing.run("native:clip", clip_params)
                 working_reference = clip_result['OUTPUT']
                 
-            self.setProgress(30)
+                ref_count = working_reference.featureCount()
+                self.log(f"Reference layer clipped: {ref_count} features", 30)
+            else:
+                input_count = working_input.featureCount()
+                ref_count = working_reference.featureCount()
+                self.log(f"Using full datasets: {input_count} input, {ref_count} reference features", 10)
+                self.setProgress(30)
+                
             if self.isCanceled():
                 return False
                 
             # Step 2: Buffer the reference layer
-            QgsMessageLog.logMessage(f"Buffering reference layer by {self.buffer_distance}m...", 
-                                    "GeoLinesQC", Qgis.Info)
+            self.log(f"Creating {self.buffer_distance}m buffer around reference layer...", 35)
             buffer_params = {
                 'INPUT': working_reference,
                 'DISTANCE': self.buffer_distance,
@@ -103,13 +121,13 @@ class QCAnalysisTask(QgsTask):
             }
             buffer_result = processing.run("native:buffer", buffer_params)
             buffered_reference = buffer_result['OUTPUT']
+            self.log("Buffer created successfully", 50)
             
-            self.setProgress(50)
             if self.isCanceled():
                 return False
                 
             # Step 3: Get lines WITHIN buffer (intersects = True)
-            QgsMessageLog.logMessage("Finding lines within buffer...", "GeoLinesQC", Qgis.Info)
+            self.log("Finding lines within buffer zone...", 55)
             intersect_params = {
                 'INPUT': working_input,
                 'OVERLAY': buffered_reference,
@@ -118,12 +136,14 @@ class QCAnalysisTask(QgsTask):
             intersect_result = processing.run("native:intersection", intersect_params)
             lines_within = intersect_result['OUTPUT']
             
-            self.setProgress(70)
+            within_count = lines_within.featureCount()
+            self.log(f"Found {within_count} line segments within buffer", 70)
+            
             if self.isCanceled():
                 return False
                 
             # Step 4: Get lines OUTSIDE buffer (intersects = False)
-            QgsMessageLog.logMessage("Finding lines outside buffer...", "GeoLinesQC", Qgis.Info)
+            self.log("Finding lines outside buffer zone...", 75)
             difference_params = {
                 'INPUT': working_input,
                 'OVERLAY': buffered_reference,
@@ -132,12 +152,14 @@ class QCAnalysisTask(QgsTask):
             difference_result = processing.run("native:difference", difference_params)
             lines_outside = difference_result['OUTPUT']
             
-            self.setProgress(85)
+            outside_count = lines_outside.featureCount()
+            self.log(f"Found {outside_count} line segments outside buffer", 85)
+            
             if self.isCanceled():
                 return False
                 
             # Step 5: Add 'intersects' field to both layers and merge
-            QgsMessageLog.logMessage("Tagging and merging results...", "GeoLinesQC", Qgis.Info)
+            self.log("Tagging line segments...", 90)
             
             # Add field to lines_within and set to True
             lines_within.dataProvider().addAttributes([QgsField("intersects", QVariant.Bool)])
@@ -157,6 +179,8 @@ class QCAnalysisTask(QgsTask):
                     lines_outside.fields().indexFromName("intersects"), False)
             lines_outside.commitChanges()
             
+            self.log("Merging results...", 95)
+            
             # Merge the two layers
             merge_params = {
                 'LAYERS': [lines_within, lines_outside],
@@ -167,33 +191,43 @@ class QCAnalysisTask(QgsTask):
             self.result_layer = merge_result['OUTPUT']
             self.result_layer.setName(self.output_name)
             
-            self.setProgress(100)
+            total_count = within_count + outside_count
+            self.log(f"Analysis complete! Total: {total_count} segments ({within_count} within, {outside_count} outside)", 100)
+            
             return True
             
         except Exception as e:
             self.exception = e
-            QgsMessageLog.logMessage(f"Error in analysis: {str(e)}", "GeoLinesQC", Qgis.Critical)
+            error_msg = f"Error in analysis: {str(e)}"
+            QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Critical)
+            self.log(error_msg, None)
             return False
     
     def get_region_source(self):
         """Get the appropriate source for region layer (selected features or all)"""
         if self.region_layer.selectedFeatureCount() > 0:
+            QgsMessageLog.logMessage(
+                f"Using {self.region_layer.selectedFeatureCount()} selected features for clipping",
+                "GeoLinesQC", 
+                Qgis.Info
+            )
             return QgsProcessingFeatureSourceDefinition(
                 self.region_layer.id(), 
                 selectedFeaturesOnly=True
             )
+        QgsMessageLog.logMessage("Using all features from region layer", "GeoLinesQC", Qgis.Info)
         return self.region_layer
     
     def finished(self, result):
         """Called when task completes"""
         if result:
-            QgsMessageLog.logMessage("Analysis completed successfully", "GeoLinesQC", Qgis.Success)
+            QgsMessageLog.logMessage("✓ Analysis completed successfully", "GeoLinesQC", Qgis.Success)
             self.analysisComplete.emit(self.result_layer)
         else:
             if self.exception:
                 self.analysisError.emit(str(self.exception))
             elif self.isCanceled():
-                QgsMessageLog.logMessage("Analysis canceled by user", "GeoLinesQC", Qgis.Warning)
+                QgsMessageLog.logMessage("⚠ Analysis canceled by user", "GeoLinesQC", Qgis.Warning)
             else:
                 self.analysisError.emit("Analysis failed for unknown reason")
 
@@ -206,6 +240,7 @@ class GeolinesQCPlugin:
         self.menu = self.tr("&GeoLines QC")
         self.styles_dir = os.path.join(self.plugin_dir, "styles")
         self.current_task = None
+        self.progress_dialog = None
 
     def tr(self, message):
         return QCoreApplication.translate("GeoLinesQC", message)
@@ -228,6 +263,8 @@ class GeolinesQCPlugin:
         # Cancel any running task
         if self.current_task:
             self.current_task.cancel()
+        if self.progress_dialog:
+            self.progress_dialog.close()
 
     def get_all_layers_from_tree(self, group=None):
         """
@@ -362,6 +399,20 @@ class GeolinesQCPlugin:
         # Create output name
         output_name = f"{layer1_name.split('/')[-1]} — {layer2_name.split('/')[-1]} ({buffer_distance}m)"
 
+        # Create progress dialog
+        self.progress_dialog = QProgressDialog(
+            "Initializing analysis...",
+            "Cancel",
+            0,
+            100,
+            self.iface.mainWindow()
+        )
+        self.progress_dialog.setWindowTitle("GeoLines QC Analysis")
+        self.progress_dialog.setWindowModality(Qt.NonModal)  # Non-modal so user can work
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setValue(0)
+        self.progress_dialog.show()
+
         # Create and start the task
         self.current_task = QCAnalysisTask(
             "GeoLines QC Analysis",
@@ -373,25 +424,58 @@ class GeolinesQCPlugin:
         )
         
         # Connect signals
+        self.current_task.progressChanged.connect(self.update_progress)
         self.current_task.analysisComplete.connect(self.on_analysis_complete)
         self.current_task.analysisError.connect(self.on_analysis_error)
+        self.progress_dialog.canceled.connect(self.on_cancel_clicked)
         
         # Add to task manager
         QgsApplication.taskManager().addTask(self.current_task)
         
-        # Show message
+        # Show message bar
         self.iface.messageBar().pushMessage(
-            "Info",
-            "Analysis started in background. You can continue working...",
+            "GeoLines QC",
+            "Analysis started in background. Check progress dialog and task manager.",
             level=Qgis.Info,
-            duration=5
+            duration=3
         )
         
-        # Close dialog
+        # Close settings dialog
         self.dialog.close()
+
+    def update_progress(self, message, value):
+        """Update progress dialog with current step"""
+        if self.progress_dialog:
+            self.progress_dialog.setLabelText(message)
+            self.progress_dialog.setValue(value)
+            
+            # Also update message bar occasionally for key steps
+            if value in [30, 50, 70, 90]:
+                self.iface.messageBar().pushMessage(
+                    "GeoLines QC",
+                    message,
+                    level=Qgis.Info,
+                    duration=2
+                )
+
+    def on_cancel_clicked(self):
+        """Handle cancel button in progress dialog"""
+        if self.current_task:
+            self.current_task.cancel()
+            self.iface.messageBar().pushMessage(
+                "GeoLines QC",
+                "Canceling analysis...",
+                level=Qgis.Warning,
+                duration=3
+            )
 
     def on_analysis_complete(self, result_layer):
         """Called when analysis completes successfully"""
+        # Close progress dialog
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+        
         if result_layer:
             # Load style
             style_path = os.path.join(self.styles_dir, "intersects.qml")
@@ -401,34 +485,65 @@ class GeolinesQCPlugin:
             # Add to map
             QgsProject.instance().addMapLayer(result_layer)
             
-            # Show success message
-            self.iface.messageBar().pushMessage(
-                "Success",
-                f"Analysis complete! Layer '{result_layer.name()}' added to map.",
-                level=Qgis.Success,
-                duration=5
-            )
-            
-            # Show statistics
+            # Calculate statistics
             within_count = sum(1 for f in result_layer.getFeatures() if f['intersects'])
             outside_count = sum(1 for f in result_layer.getFeatures() if not f['intersects'])
+            total_count = within_count + outside_count
             
-            QMessageBox.information(
-                self.iface.mainWindow(),
-                "Analysis Complete",
-                f"Results:\n\n"
-                f"Lines within buffer: {within_count}\n"
-                f"Lines outside buffer: {outside_count}\n\n"
-                f"Total segments: {within_count + outside_count}"
+            # Calculate lengths
+            within_length = sum(f.geometry().length() for f in result_layer.getFeatures() if f['intersects'])
+            outside_length = sum(f.geometry().length() for f in result_layer.getFeatures() if not f['intersects'])
+            total_length = within_length + outside_length
+            
+            # Calculate quality score
+            quality_score = (within_length / total_length * 100) if total_length > 0 else 0
+            
+            # Show success message in message bar
+            self.iface.messageBar().pushMessage(
+                "✓ Analysis Complete",
+                f"Layer '{result_layer.name()}' added to map | {within_count} within, {outside_count} outside buffer",
+                level=Qgis.Success,
+                duration=10
             )
+            
+            # Show detailed statistics dialog
+            stats_message = f"""<b>GeoLines QC Results</b><br><br>
+<b>Segments:</b><br>
+• Within buffer: {within_count} segments<br>
+• Outside buffer: {outside_count} segments<br>
+• Total: {total_count} segments<br><br>
+
+<b>Lengths:</b><br>
+• Within buffer: {within_length:.2f} m<br>
+• Outside buffer: {outside_length:.2f} m<br>
+• Total: {total_length:.2f} m<br><br>
+
+<b>Quality Score: {quality_score:.1f}%</b><br>
+(percentage of line length within buffer)<br><br>
+
+<i>Green lines = within buffer<br>
+Red lines = outside buffer (need review)</i>
+"""
+            
+            msg_box = QMessageBox(self.iface.mainWindow())
+            msg_box.setWindowTitle("Analysis Complete")
+            msg_box.setTextFormat(Qt.RichText)
+            msg_box.setText(stats_message)
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.exec_()
         
         self.current_task = None
 
     def on_analysis_error(self, error_message):
         """Called when analysis fails"""
+        # Close progress dialog
+        if self.progress_dialog:
+            self.progress_dialog.close()
+            self.progress_dialog = None
+        
         self.iface.messageBar().pushMessage(
-            "Error",
-            f"Analysis failed: {error_message}",
+            "✗ Analysis Failed",
+            error_message,
             level=Qgis.Critical,
             duration=10
         )
@@ -436,7 +551,8 @@ class GeolinesQCPlugin:
         QMessageBox.critical(
             self.iface.mainWindow(),
             "Analysis Error",
-            f"An error occurred during analysis:\n\n{error_message}"
+            f"An error occurred during analysis:\n\n{error_message}\n\n"
+            f"Check the Log Messages panel (View → Panels → Log Messages) for details."
         )
         
         self.current_task = None
