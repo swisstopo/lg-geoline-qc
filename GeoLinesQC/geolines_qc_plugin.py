@@ -36,6 +36,14 @@ from qgis.PyQt.QtWidgets import (
 DEFAULT_BUFFER = 500.0
 DIALOG_WIDTH = 400
 
+# Enable high DPI scaling
+if hasattr(QApplication, 'setAttribute'):
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
+# Set the environment variable for auto screen scaling
+os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+
 
 class QCAnalysisTask(QgsTask):
     """Background task for running the QC analysis"""
