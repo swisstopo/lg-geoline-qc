@@ -97,7 +97,7 @@ class QCAnalysisTask(QgsTask):
         value = feature[self.boundary_field]
         
         # Handle NULL/None
-        if value is None or value == NULL:
+        if value is None:
             return False
         
         # Handle boolean type
@@ -113,7 +113,7 @@ class QCAnalysisTask(QgsTask):
         # Handle numeric (treat 0 as False, non-zero as True)
         try:
             return bool(int(value))
-        except:
+        except Exception as e:
             return False
         
     def run(self):
@@ -261,7 +261,7 @@ class QCAnalysisTask(QgsTask):
                 
                 # Log first boundary feature found
                 if is_boundary and boundary_within == 0 and boundary_outside == 0:
-                    self.log(f"Processing boundary features with exact match (0m buffer)...")
+                    self.log("Processing boundary features with exact match (0m buffer)...")
                 
                 # Check spatial relationship with appropriate buffer
                 if check_geometry.contains(geom):
