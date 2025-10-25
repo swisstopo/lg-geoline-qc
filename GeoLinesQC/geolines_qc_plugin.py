@@ -35,7 +35,7 @@ DEFAULT_BUFFER = 500.0
 DIALOG_WIDTH = 400
 
 # Enable high DPI scaling
-if hasattr(QApplication, 'setAttribute'):
+if hasattr(QApplication, "setAttribute"):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
@@ -43,17 +43,24 @@ if hasattr(QApplication, 'setAttribute'):
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
 
 
-
 class QCAnalysisTask(QgsTask):
     """Background task for running the QC analysis"""
-    
+
     # Signals for progress updates
     progressChanged = pyqtSignal(str, int)  # message, progress value
     analysisComplete = pyqtSignal(object)  # Will emit the result layer
     analysisError = pyqtSignal(str)
-    
-    def __init__(self, description, input_layer, reference_layer, buffer_distance, 
-                 region_layer=None, output_name="QC Result", use_boundary_check=False):
+
+    def __init__(
+        self,
+        description,
+        input_layer,
+        reference_layer,
+        buffer_distance,
+        region_layer=None,
+        output_name="QC Result",
+        use_boundary_check=False,
+    ):
         super().__init__(description, QgsTask.CanCancel)
         self.input_layer = input_layer
         self.reference_layer = reference_layer
@@ -64,14 +71,14 @@ class QCAnalysisTask(QgsTask):
         self.result_layer = None
         self.exception = None
         self.boundary_field = None
-        
+
     def log(self, message, progress=None):
         """Log message to both QGIS log and emit signal for progress dialog"""
         QgsMessageLog.logMessage(message, "GeoLinesQC", Qgis.Info)
         if progress is not None:
             self.progressChanged.emit(message, progress)
             self.setProgress(progress)
-    
+
     def find_boundary_field(self, layer):
         """
         Find the boundary field with fuzzy matching.
@@ -80,11 +87,13 @@ class QCAnalysisTask(QgsTask):
         """
         for field in layer.fields():
             field_name_lower = field.name().lower()
-            if field_name_lower.startswith('mp_bound'):
-                self.log(f"Found boundary field: '{field.name()}' (type: {field.typeName()})")
+            if field_name_lower.startswith("mp_bound"):
+                self.log(
+                    f"Found boundary field: '{field.name()}' (type: {field.typeName()})"
+                )
                 return field.name()
         return None
-    
+
     def is_boundary_feature(self, feature):
         """
         Check if a feature is marked as a boundary feature.
@@ -93,176 +102,210 @@ class QCAnalysisTask(QgsTask):
         """
         if not self.boundary_field:
             return False
-        
+
         value = feature[self.boundary_field]
-        
+
         # Handle NULL/None
         if value is None:
             return False
-        
+
         # Handle boolean type
         if isinstance(value, bool):
             return value
-        
+
         # Handle text/string type
         if isinstance(value, str):
             value_lower = value.lower().strip()
             # Common "true" values
-            return value_lower in ['yes', 'true', '1', 'y', 't']
-        
+            return value_lower in ["yes", "true", "1", "y", "t"]
+
         # Handle numeric (treat 0 as False, non-zero as True)
         try:
             return bool(int(value))
         except Exception as e:
+            self.exception = e
+            error_msg = f"Error in boundary feature: {str(e)}"
+            QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Warning)
             return False
-        
+
     def run(self):
         """Execute the analysis in background"""
         try:
             self.log("Starting GeoLines QC analysis...", 0)
-            
+
             # Step 1: Check for boundary field if requested
             if self.use_boundary_check:
                 self.log("Checking for boundary attribute field...", 2)
                 self.boundary_field = self.find_boundary_field(self.input_layer)
                 if self.boundary_field:
-                    self.log(f"Boundary checking enabled using field: '{self.boundary_field}'", 5)
+                    self.log(
+                        f"Boundary checking enabled using field: '{self.boundary_field}'",
+                        5,
+                    )
                 else:
-                    self.log("Warning: Boundary checking requested but no matching field found (looking for 'mp_bound*')", 5)
+                    self.log(
+                        "Warning: Boundary checking requested but no matching field found (looking for 'mp_bound*')",
+                        5,
+                    )
                     self.log("Continuing with normal buffer for all features", 5)
-            
+
             # Step 2: Clip layers if region is provided
             working_input = self.input_layer
             working_reference = self.reference_layer
-            
+
             if self.region_layer:
                 self.log("Clipping input layer to region...", 10)
                 if self.isCanceled():
                     return False
-                
+
                 # Clip input layer
                 clip_params = {
-                    'INPUT': self.input_layer,
-                    'OVERLAY': self.get_region_source(),
-                    'OUTPUT': 'memory:'
+                    "INPUT": self.input_layer,
+                    "OVERLAY": self.get_region_source(),
+                    "OUTPUT": "memory:",
                 }
                 clip_result = processing.run("native:clip", clip_params)
-                working_input = clip_result['OUTPUT']
-                
+                working_input = clip_result["OUTPUT"]
+
                 input_count = working_input.featureCount()
                 self.log(f"Input layer clipped: {input_count} features", 15)
-                
+
                 if self.isCanceled():
                     return False
-                    
+
                 # Clip reference layer
                 self.log("Clipping reference layer to region...", 20)
-                clip_params['INPUT'] = self.reference_layer
+                clip_params["INPUT"] = self.reference_layer
                 clip_result = processing.run("native:clip", clip_params)
-                working_reference = clip_result['OUTPUT']
-                
+                working_reference = clip_result["OUTPUT"]
+
                 ref_count = working_reference.featureCount()
                 self.log(f"Reference layer clipped: {ref_count} features", 25)
             else:
                 input_count = working_input.featureCount()
                 ref_count = working_reference.featureCount()
-                self.log(f"Using full datasets: {input_count} input, {ref_count} reference features", 10)
+                self.log(
+                    f"Using full datasets: {input_count} input, {ref_count} reference features",
+                    10,
+                )
                 self.setProgress(25)
-                
+
             if self.isCanceled():
                 return False
-                
+
             # Step 3: Buffer the reference layer
-            self.log(f"Creating {self.buffer_distance}m buffer around reference layer...", 30)
+            self.log(
+                f"Creating {self.buffer_distance}m buffer around reference layer...", 30
+            )
             buffer_params = {
-                'INPUT': working_reference,
-                'DISTANCE': self.buffer_distance,
-                'SEGMENTS': 5,
-                'END_CAP_STYLE': 0,  # Round
-                'JOIN_STYLE': 0,  # Round
-                'MITER_LIMIT': 2,
-                'DISSOLVE': True,  # Dissolve all buffers into one
-                'OUTPUT': 'memory:'
+                "INPUT": working_reference,
+                "DISTANCE": self.buffer_distance,
+                "SEGMENTS": 5,
+                "END_CAP_STYLE": 0,  # Round
+                "JOIN_STYLE": 0,  # Round
+                "MITER_LIMIT": 2,
+                "DISSOLVE": True,  # Dissolve all buffers into one
+                "OUTPUT": "memory:",
             }
             buffer_result = processing.run("native:buffer", buffer_params)
-            buffered_reference = buffer_result['OUTPUT']
-            
-            # Also create a zero-buffer version for exact matching (boundary features)
+            buffered_reference = buffer_result["OUTPUT"]
+
+            # For exact matching (boundary features), use the original reference geometry
+            # No need to buffer - we want exact match!
             if self.use_boundary_check and self.boundary_field:
-                self.log("Creating exact match geometry for boundary features...", 35)
-                exact_buffer_params = buffer_params.copy()
-                exact_buffer_params['DISTANCE'] = 0
-                exact_buffer_result = processing.run("native:buffer", exact_buffer_params)
-                exact_match_geometry = exact_buffer_result['OUTPUT']
+                self.log(
+                    "Preparing exact match geometry for boundary features (no buffer)...",
+                    35,
+                )
+                # Dissolve reference layer for exact matching (same as buffered but no distance)
+                dissolve_params = {
+                    "INPUT": working_reference,
+                    "FIELD": [],  # Dissolve all into one
+                    "OUTPUT": "memory:",
+                }
+                dissolve_result = processing.run("native:dissolve", dissolve_params)
+                exact_match_reference = dissolve_result["OUTPUT"]
             else:
-                exact_match_geometry = None
-            
+                exact_match_reference = None
+
             self.log("Buffer created successfully", 40)
-            
+
             if self.isCanceled():
                 return False
-            
+
             # Step 4: Extract buffer geometries
             self.log("Extracting buffer geometries...", 45)
             buffer_geometry = None
             for feature in buffered_reference.getFeatures():
                 buffer_geometry = feature.geometry()
                 break  # Only one feature due to DISSOLVE
-            
+
             if not buffer_geometry:
                 raise Exception("Buffer geometry is empty")
-            
+
             # Extract exact match geometry if available
             exact_geometry = None
-            if exact_match_geometry:
-                for feature in exact_match_geometry.getFeatures():
+            if exact_match_reference:
+                for feature in exact_match_reference.getFeatures():
                     exact_geometry = feature.geometry()
                     break
-            
+
             # Step 5: Process features with spatial logic
             self.log("Analyzing features with spatial index...", 50)
-            
+
             # Create output layer
             output_layer = QgsVectorLayer(
                 "LineString?crs=" + working_input.crs().authid(),
                 self.output_name,
-                "memory"
+                "memory",
             )
-            output_layer.dataProvider().addAttributes([
-                QgsField("intersects", QVariant.Bool),
-                QgsField("is_boundary", QVariant.Bool)
-            ])
+            output_layer.dataProvider().addAttributes(
+                [
+                    QgsField("intersects", QVariant.Bool),
+                    QgsField("is_boundary", QVariant.Bool),
+                ]
+            )
             output_layer.updateFields()
-            
+
             total_features = working_input.featureCount()
             features_to_add = []
-            
+
             within_count = 0
             outside_count = 0
             crossing_count = 0
             boundary_within = 0
             boundary_outside = 0
-            
+
             # Process each feature
             for idx, feature in enumerate(working_input.getFeatures()):
                 if self.isCanceled():
                     return False
-                
+
                 # Update progress every 10%
                 if idx % max(1, total_features // 10) == 0:
                     progress = 50 + int((idx / total_features) * 40)
-                    self.log(f"Processing feature {idx + 1}/{total_features}...", progress)
-                
+                    self.log(
+                        f"Processing feature {idx + 1}/{total_features}...", progress
+                    )
+
                 geom = feature.geometry()
-                is_boundary = self.is_boundary_feature(feature) if self.boundary_field else False
-                
+                is_boundary = (
+                    self.is_boundary_feature(feature) if self.boundary_field else False
+                )
+
                 # Choose which buffer to check against
-                check_geometry = exact_geometry if (is_boundary and exact_geometry) else buffer_geometry
-                
+                check_geometry = (
+                    exact_geometry
+                    if (is_boundary and exact_geometry)
+                    else buffer_geometry
+                )
+
                 # Log first boundary feature found
                 if is_boundary and boundary_within == 0 and boundary_outside == 0:
-                    self.log("Processing boundary features with exact match (0m buffer)...")
-                
+                    self.log(
+                        "Processing boundary features with exact match (0m buffer)..."
+                    )
+
                 # Check spatial relationship with appropriate buffer
                 if check_geometry.contains(geom):
                     # Completely inside buffer
@@ -274,7 +317,7 @@ class QCAnalysisTask(QgsTask):
                     within_count += 1
                     if is_boundary:
                         boundary_within += 1
-                    
+
                 elif not check_geometry.intersects(geom):
                     # Completely outside buffer
                     new_feature = QgsFeature(output_layer.fields())
@@ -285,11 +328,11 @@ class QCAnalysisTask(QgsTask):
                     outside_count += 1
                     if is_boundary:
                         boundary_outside += 1
-                    
+
                 else:
                     # Crosses buffer boundary - need to split
                     crossing_count += 1
-                    
+
                     # Part inside buffer
                     inside_geom = geom.intersection(check_geometry)
                     if not inside_geom.isEmpty():
@@ -307,7 +350,7 @@ class QCAnalysisTask(QgsTask):
                             new_feature.setAttribute("intersects", True)
                             new_feature.setAttribute("is_boundary", is_boundary)
                             features_to_add.append(new_feature)
-                    
+
                     # Part outside buffer
                     outside_geom = geom.difference(check_geometry)
                     if not outside_geom.isEmpty():
@@ -325,15 +368,15 @@ class QCAnalysisTask(QgsTask):
                             new_feature.setAttribute("intersects", False)
                             new_feature.setAttribute("is_boundary", is_boundary)
                             features_to_add.append(new_feature)
-            
+
             self.log("Adding features to output layer...", 92)
             output_layer.dataProvider().addFeatures(features_to_add)
             output_layer.updateExtents()
-            
+
             self.result_layer = output_layer
-            
+
             total_segments = len(features_to_add)
-            
+
             # Build summary message
             summary = (
                 f"Analysis complete! Total input: {total_features} features | "
@@ -342,52 +385,60 @@ class QCAnalysisTask(QgsTask):
                 f"Crossing boundary: {crossing_count} | "
                 f"Total output segments: {total_segments}"
             )
-            
+
             if self.use_boundary_check and self.boundary_field:
                 boundary_total = boundary_within + boundary_outside
                 summary += (
                     f"\nBoundary features: {boundary_total} "
                     f"(exact match check: {boundary_within} within, {boundary_outside} outside)"
                 )
-            
+
             self.log(summary, 100)
-            
+
             return True
-            
+
         except Exception as e:
             self.exception = e
             error_msg = f"Error in analysis: {str(e)}"
             QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Critical)
             import traceback
-            QgsMessageLog.logMessage(traceback.format_exc(), "GeoLinesQC", Qgis.Critical)
+
+            QgsMessageLog.logMessage(
+                traceback.format_exc(), "GeoLinesQC", Qgis.Critical
+            )
             self.log(error_msg, None)
             return False
-    
+
     def get_region_source(self):
         """Get the appropriate source for region layer (selected features or all)"""
         if self.region_layer.selectedFeatureCount() > 0:
             QgsMessageLog.logMessage(
                 f"Using {self.region_layer.selectedFeatureCount()} selected features for clipping",
-                "GeoLinesQC", 
-                Qgis.Info
+                "GeoLinesQC",
+                Qgis.Info,
             )
             return QgsProcessingFeatureSourceDefinition(
-                self.region_layer.id(), 
-                selectedFeaturesOnly=True
+                self.region_layer.id(), selectedFeaturesOnly=True
             )
-        QgsMessageLog.logMessage("Using all features from region layer", "GeoLinesQC", Qgis.Info)
+        QgsMessageLog.logMessage(
+            "Using all features from region layer", "GeoLinesQC", Qgis.Info
+        )
         return self.region_layer
-    
+
     def finished(self, result):
         """Called when task completes"""
         if result:
-            QgsMessageLog.logMessage("✓ Analysis completed successfully", "GeoLinesQC", Qgis.Success)
+            QgsMessageLog.logMessage(
+                "✓ Analysis completed successfully", "GeoLinesQC", Qgis.Success
+            )
             self.analysisComplete.emit(self.result_layer)
         else:
             if self.exception:
                 self.analysisError.emit(str(self.exception))
             elif self.isCanceled():
-                QgsMessageLog.logMessage("⚠ Analysis canceled by user", "GeoLinesQC", Qgis.Warning)
+                QgsMessageLog.logMessage(
+                    "⚠ Analysis canceled by user", "GeoLinesQC", Qgis.Warning
+                )
             else:
                 self.analysisError.emit("Analysis failed for unknown reason")
 
@@ -433,10 +484,10 @@ class GeolinesQCPlugin:
         """
         if group is None:
             group = QgsProject.instance().layerTreeRoot()
-        
+
         layers = []
         for child in group.children():
-            if hasattr(child, 'layer') and child.layer():
+            if hasattr(child, "layer") and child.layer():
                 # It's a layer
                 layer = child.layer()
                 # Get the display name from the tree
@@ -447,17 +498,17 @@ class GeolinesQCPlugin:
                 while parent and parent != QgsProject.instance().layerTreeRoot():
                     group_path.insert(0, parent.name())
                     parent = parent.parent()
-                
+
                 if group_path:
                     full_name = " / ".join(group_path) + " / " + display_name
                 else:
                     full_name = display_name
-                    
+
                 layers.append((full_name, layer))
-            elif hasattr(child, 'children'):
+            elif hasattr(child, "children"):
                 # It's a group, recurse
                 layers.extend(self.get_all_layers_from_tree(child))
-        
+
         return layers
 
     def run(self):
@@ -475,9 +526,11 @@ class GeolinesQCPlugin:
         self.threshold_input.setPlaceholderText(
             f"Optional: buffer distance [m] (default: {DEFAULT_BUFFER})"
         )
-        
+
         # Add boundary check checkbox
-        self.boundary_check = QCheckBox("Use exact match for boundary lines (MP_BOUNDARY)")
+        self.boundary_check = QCheckBox(
+            "Use exact match for boundary lines (MP_BOUNDARY)"
+        )
         self.boundary_check.setToolTip(
             "If checked, lines marked with 'MP_BOUNDARY' attribute will use exact matching (0m buffer)\n"
             "instead of the specified buffer distance. Useful for project boundary lines that must\n"
@@ -498,19 +551,19 @@ class GeolinesQCPlugin:
 
         # Get all layers including those in groups
         all_layers = self.get_all_layers_from_tree()
-        
+
         # Store layer objects for later retrieval
         self.layer_map = {name: layer for name, layer in all_layers}
-        
+
         # Populate combos with layer names
         layer_names = [name for name, _ in all_layers]
-        
+
         self.layer1_combo.clear()
         self.layer1_combo.addItems(layer_names)
-        
+
         self.layer2_combo.clear()
         self.layer2_combo.addItems(layer_names)
-        
+
         self.region_combo.clear()
         self.region_combo.addItem("None")
         self.region_combo.addItems(layer_names)
@@ -530,7 +583,7 @@ class GeolinesQCPlugin:
         layer2_name = self.layer2_combo.currentText()
         region_name = self.region_combo.currentText()
         use_boundary_check = self.boundary_check.isChecked()
-        
+
         buffer_distance = (
             float(self.threshold_input.text())
             if self.threshold_input.text()
@@ -540,31 +593,29 @@ class GeolinesQCPlugin:
         # Get actual layer objects
         input_layer = self.layer_map.get(layer1_name)
         reference_layer = self.layer_map.get(layer2_name)
-        region_layer = self.layer_map.get(region_name) if region_name != "None" else None
+        region_layer = (
+            self.layer_map.get(region_name) if region_name != "None" else None
+        )
 
         # Validate inputs
         if not input_layer or not reference_layer:
             QMessageBox.warning(
                 self.dialog,
                 "Invalid Selection",
-                "Please select valid input and reference layers."
+                "Please select valid input and reference layers.",
             )
             return
-        
+
         # Validate that layers are line geometries
         if input_layer.geometryType() != 1:  # 1 = Line
             QMessageBox.warning(
-                self.dialog,
-                "Invalid Geometry",
-                "Input layer must be a line layer."
+                self.dialog, "Invalid Geometry", "Input layer must be a line layer."
             )
             return
-            
+
         if reference_layer.geometryType() != 1:
             QMessageBox.warning(
-                self.dialog,
-                "Invalid Geometry",
-                "Reference layer must be a line layer."
+                self.dialog, "Invalid Geometry", "Reference layer must be a line layer."
             )
             return
 
@@ -575,14 +626,12 @@ class GeolinesQCPlugin:
 
         # Create progress dialog
         self.progress_dialog = QProgressDialog(
-            "Initializing analysis...",
-            "Cancel",
-            0,
-            100,
-            self.iface.mainWindow()
+            "Initializing analysis...", "Cancel", 0, 100, self.iface.mainWindow()
         )
         self.progress_dialog.setWindowTitle("GeoLines QC Analysis")
-        self.progress_dialog.setWindowModality(Qt.NonModal)  # Non-modal so user can work
+        self.progress_dialog.setWindowModality(
+            Qt.NonModal
+        )  # Non-modal so user can work
         self.progress_dialog.setMinimumDuration(0)
         self.progress_dialog.setValue(0)
         self.progress_dialog.show()
@@ -595,29 +644,26 @@ class GeolinesQCPlugin:
             buffer_distance,
             region_layer,
             output_name,
-            use_boundary_check
+            use_boundary_check,
         )
-        
+
         # Connect signals
         self.current_task.progressChanged.connect(self.update_progress)
         self.current_task.analysisComplete.connect(self.on_analysis_complete)
         self.current_task.analysisError.connect(self.on_analysis_error)
         self.progress_dialog.canceled.connect(self.on_cancel_clicked)
-        
+
         # Add to task manager
         QgsApplication.taskManager().addTask(self.current_task)
-        
+
         # Show message bar
         msg = "Analysis started. Using optimized spatial logic."
         if use_boundary_check:
             msg += " Boundary lines will use exact matching."
         self.iface.messageBar().pushMessage(
-            "GeoLines QC",
-            msg,
-            level=Qgis.Info,
-            duration=5
+            "GeoLines QC", msg, level=Qgis.Info, duration=5
         )
-        
+
         # Close settings dialog
         self.dialog.close()
 
@@ -626,14 +672,11 @@ class GeolinesQCPlugin:
         if self.progress_dialog:
             self.progress_dialog.setLabelText(message)
             self.progress_dialog.setValue(value)
-            
+
             # Also update message bar occasionally for key steps
             if value in [25, 40, 50, 70, 92]:
                 self.iface.messageBar().pushMessage(
-                    "GeoLines QC",
-                    message,
-                    level=Qgis.Info,
-                    duration=2
+                    "GeoLines QC", message, level=Qgis.Info, duration=2
                 )
 
     def on_cancel_clicked(self):
@@ -641,10 +684,7 @@ class GeolinesQCPlugin:
         if self.current_task:
             self.current_task.cancel()
             self.iface.messageBar().pushMessage(
-                "GeoLines QC",
-                "Canceling analysis...",
-                level=Qgis.Warning,
-                duration=3
+                "GeoLines QC", "Canceling analysis...", level=Qgis.Warning, duration=3
             )
 
     def on_analysis_complete(self, result_layer):
@@ -653,46 +693,63 @@ class GeolinesQCPlugin:
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
-        
+
         if result_layer:
             # Load style
             style_path = os.path.join(self.styles_dir, "intersects.qml")
             if os.path.exists(style_path):
                 result_layer.loadNamedStyle(style_path)
-            
+
             # Add to map
             QgsProject.instance().addMapLayer(result_layer)
-            
+
             # Calculate statistics
-            within_count = sum(1 for f in result_layer.getFeatures() if f['intersects'])
-            outside_count = sum(1 for f in result_layer.getFeatures() if not f['intersects'])
+            within_count = sum(1 for f in result_layer.getFeatures() if f["intersects"])
+            outside_count = sum(
+                1 for f in result_layer.getFeatures() if not f["intersects"]
+            )
             total_count = within_count + outside_count
-            
+
             # Calculate boundary statistics if available
-            boundary_within = sum(1 for f in result_layer.getFeatures() if f['intersects'] and f['is_boundary'])
-            boundary_outside = sum(1 for f in result_layer.getFeatures() if not f['intersects'] and f['is_boundary'])
+            boundary_within = sum(
+                1
+                for f in result_layer.getFeatures()
+                if f["intersects"] and f["is_boundary"]
+            )
+            boundary_outside = sum(
+                1
+                for f in result_layer.getFeatures()
+                if not f["intersects"] and f["is_boundary"]
+            )
             boundary_total = boundary_within + boundary_outside
-            
+
             # Calculate lengths
-            within_length = sum(f.geometry().length() for f in result_layer.getFeatures() if f['intersects'])
-            outside_length = sum(f.geometry().length() for f in result_layer.getFeatures() if not f['intersects'])
+            within_length = sum(
+                f.geometry().length()
+                for f in result_layer.getFeatures()
+                if f["intersects"]
+            )
+            outside_length = sum(
+                f.geometry().length()
+                for f in result_layer.getFeatures()
+                if not f["intersects"]
+            )
             total_length = within_length + outside_length
-            
+
             # Calculate quality score
-            quality_score = (within_length / total_length * 100) if total_length > 0 else 0
-            
+            quality_score = (
+                (within_length / total_length * 100) if total_length > 0 else 0
+            )
+
             # Show success message in message bar
             msg = f"Layer '{result_layer.name()}' added | {within_count} within, {outside_count} outside"
             if boundary_total > 0:
                 msg += f" | {boundary_total} boundary features"
-            
+
             self.iface.messageBar().pushMessage(
-                "✓ Analysis Complete",
-                msg,
-                level=Qgis.Success,
-                duration=10
+                "✓ Analysis Complete", msg, level=Qgis.Success, duration=10
             )
-            
+
             # Show detailed statistics dialog
             stats_message = f"""<b>GeoLines QC Results</b><br><br>
 <b>Segments:</b><br>
@@ -709,7 +766,11 @@ class GeolinesQCPlugin:
 (percentage of line length within buffer)<br><br>"""
 
             if boundary_total > 0:
-                boundary_quality = (boundary_within / boundary_total * 100) if boundary_total > 0 else 0
+                boundary_quality = (
+                    (boundary_within / boundary_total * 100)
+                    if boundary_total > 0
+                    else 0
+                )
                 stats_message += f"""<b>Boundary Features (exact match):</b><br>
 • Within reference: {boundary_within} segments<br>
 • Outside reference: {boundary_outside} segments<br>
@@ -718,14 +779,14 @@ class GeolinesQCPlugin:
 
             stats_message += """<i>Green lines = within buffer<br>
 Red lines = outside buffer (need review)</i>"""
-            
+
             msg_box = QMessageBox(self.iface.mainWindow())
             msg_box.setWindowTitle("Analysis Complete")
             msg_box.setTextFormat(Qt.RichText)
             msg_box.setText(stats_message)
             msg_box.setIcon(QMessageBox.Information)
             msg_box.exec_()
-        
+
         self.current_task = None
 
     def on_analysis_error(self, error_message):
@@ -734,19 +795,16 @@ Red lines = outside buffer (need review)</i>"""
         if self.progress_dialog:
             self.progress_dialog.close()
             self.progress_dialog = None
-        
+
         self.iface.messageBar().pushMessage(
-            "✗ Analysis Failed",
-            error_message,
-            level=Qgis.Critical,
-            duration=10
+            "✗ Analysis Failed", error_message, level=Qgis.Critical, duration=10
         )
-        
+
         QMessageBox.critical(
             self.iface.mainWindow(),
             "Analysis Error",
             f"An error occurred during analysis:\n\n{error_message}\n\n"
-            f"Check the Log Messages panel (View → Panels → Log Messages) for details."
+            f"Check the Log Messages panel (View → Panels → Log Messages) for details.",
         )
-        
+
         self.current_task = None
