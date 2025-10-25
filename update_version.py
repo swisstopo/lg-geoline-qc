@@ -23,7 +23,7 @@ def update_plugin_version(metadata_path, new_version):
         version_pattern = re.compile(r"^version\s*=\s*.*$", re.IGNORECASE)
         updated = False
         for i, line in enumerate(lines):
-            if 'version' in line and version_pattern.match(line):
+            if "version" in line and version_pattern.match(line):
                 lines[i] = f"version={new_version}\n"
                 updated = True
                 break
