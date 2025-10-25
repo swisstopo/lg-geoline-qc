@@ -14,6 +14,8 @@ from qgis.core import (
     QgsProcessingFeatureSourceDefinition,
     QgsTask,
     QgsApplication,
+    QgsSpatialIndex,
+    QgsGeometry,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
@@ -85,30 +87,30 @@ class QCAnalysisTask(QgsTask):
                 working_input = clip_result['OUTPUT']
                 
                 input_count = working_input.featureCount()
-                self.log(f"Input layer clipped: {input_count} features", 20)
+                self.log(f"Input layer clipped: {input_count} features", 15)
                 
                 if self.isCanceled():
                     return False
                     
                 # Clip reference layer
-                self.log("Clipping reference layer to region...", 25)
+                self.log("Clipping reference layer to region...", 20)
                 clip_params['INPUT'] = self.reference_layer
                 clip_result = processing.run("native:clip", clip_params)
                 working_reference = clip_result['OUTPUT']
                 
                 ref_count = working_reference.featureCount()
-                self.log(f"Reference layer clipped: {ref_count} features", 30)
+                self.log(f"Reference layer clipped: {ref_count} features", 25)
             else:
                 input_count = working_input.featureCount()
                 ref_count = working_reference.featureCount()
                 self.log(f"Using full datasets: {input_count} input, {ref_count} reference features", 10)
-                self.setProgress(30)
+                self.setProgress(25)
                 
             if self.isCanceled():
                 return False
                 
             # Step 2: Buffer the reference layer
-            self.log(f"Creating {self.buffer_distance}m buffer around reference layer...", 35)
+            self.log(f"Creating {self.buffer_distance}m buffer around reference layer...", 30)
             buffer_params = {
                 'INPUT': working_reference,
                 'DISTANCE': self.buffer_distance,
@@ -121,78 +123,122 @@ class QCAnalysisTask(QgsTask):
             }
             buffer_result = processing.run("native:buffer", buffer_params)
             buffered_reference = buffer_result['OUTPUT']
-            self.log("Buffer created successfully", 50)
+            self.log("Buffer created successfully", 40)
             
             if self.isCanceled():
                 return False
+            
+            # Step 3: Create spatial index for the buffer
+            self.log("Creating spatial index for efficient geometry checking...", 45)
+            buffer_geometry = None
+            for feature in buffered_reference.getFeatures():
+                buffer_geometry = feature.geometry()
+                break  # Only one feature due to DISSOLVE
+            
+            if not buffer_geometry:
+                raise Exception("Buffer geometry is empty")
+            
+            # Step 4: Process features with spatial logic
+            self.log("Analyzing features with spatial index...", 50)
+            
+            # Create output layer
+            output_layer = QgsVectorLayer(
+                "LineString?crs=" + working_input.crs().authid(),
+                self.output_name,
+                "memory"
+            )
+            output_layer.dataProvider().addAttributes([
+                QgsField("intersects", QVariant.Bool)
+            ])
+            output_layer.updateFields()
+            
+            total_features = working_input.featureCount()
+            features_to_add = []
+            
+            within_count = 0
+            outside_count = 0
+            crossing_count = 0
+            
+            # Process each feature
+            for idx, feature in enumerate(working_input.getFeatures()):
+                if self.isCanceled():
+                    return False
                 
-            # Step 3: Get lines WITHIN buffer (intersects = True)
-            self.log("Finding lines within buffer zone...", 55)
-            intersect_params = {
-                'INPUT': working_input,
-                'OVERLAY': buffered_reference,
-                'OUTPUT': 'memory:'
-            }
-            intersect_result = processing.run("native:intersection", intersect_params)
-            lines_within = intersect_result['OUTPUT']
-            
-            within_count = lines_within.featureCount()
-            self.log(f"Found {within_count} line segments within buffer", 70)
-            
-            if self.isCanceled():
-                return False
+                # Update progress every 10%
+                if idx % max(1, total_features // 10) == 0:
+                    progress = 50 + int((idx / total_features) * 40)
+                    self.log(f"Processing feature {idx + 1}/{total_features}...", progress)
                 
-            # Step 4: Get lines OUTSIDE buffer (intersects = False)
-            self.log("Finding lines outside buffer zone...", 75)
-            difference_params = {
-                'INPUT': working_input,
-                'OVERLAY': buffered_reference,
-                'OUTPUT': 'memory:'
-            }
-            difference_result = processing.run("native:difference", difference_params)
-            lines_outside = difference_result['OUTPUT']
-            
-            outside_count = lines_outside.featureCount()
-            self.log(f"Found {outside_count} line segments outside buffer", 85)
-            
-            if self.isCanceled():
-                return False
+                geom = feature.geometry()
                 
-            # Step 5: Add 'intersects' field to both layers and merge
-            self.log("Tagging line segments...", 90)
+                # Check spatial relationship with buffer
+                if buffer_geometry.contains(geom):
+                    # Completely inside buffer
+                    new_feature = QgsFeature(output_layer.fields())
+                    new_feature.setGeometry(geom)
+                    new_feature.setAttribute("intersects", True)
+                    features_to_add.append(new_feature)
+                    within_count += 1
+                    
+                elif not buffer_geometry.intersects(geom):
+                    # Completely outside buffer
+                    new_feature = QgsFeature(output_layer.fields())
+                    new_feature.setGeometry(geom)
+                    new_feature.setAttribute("intersects", False)
+                    features_to_add.append(new_feature)
+                    outside_count += 1
+                    
+                else:
+                    # Crosses buffer boundary - need to split
+                    crossing_count += 1
+                    
+                    # Part inside buffer
+                    inside_geom = geom.intersection(buffer_geometry)
+                    if not inside_geom.isEmpty():
+                        # Handle both single and multi-part geometries
+                        if inside_geom.isMultipart():
+                            for part in inside_geom.asGeometryCollection():
+                                new_feature = QgsFeature(output_layer.fields())
+                                new_feature.setGeometry(part)
+                                new_feature.setAttribute("intersects", True)
+                                features_to_add.append(new_feature)
+                        else:
+                            new_feature = QgsFeature(output_layer.fields())
+                            new_feature.setGeometry(inside_geom)
+                            new_feature.setAttribute("intersects", True)
+                            features_to_add.append(new_feature)
+                    
+                    # Part outside buffer
+                    outside_geom = geom.difference(buffer_geometry)
+                    if not outside_geom.isEmpty():
+                        # Handle both single and multi-part geometries
+                        if outside_geom.isMultipart():
+                            for part in outside_geom.asGeometryCollection():
+                                new_feature = QgsFeature(output_layer.fields())
+                                new_feature.setGeometry(part)
+                                new_feature.setAttribute("intersects", False)
+                                features_to_add.append(new_feature)
+                        else:
+                            new_feature = QgsFeature(output_layer.fields())
+                            new_feature.setGeometry(outside_geom)
+                            new_feature.setAttribute("intersects", False)
+                            features_to_add.append(new_feature)
             
-            # Add field to lines_within and set to True
-            lines_within.dataProvider().addAttributes([QgsField("intersects", QVariant.Bool)])
-            lines_within.updateFields()
-            lines_within.startEditing()
-            for feature in lines_within.getFeatures():
-                lines_within.changeAttributeValue(feature.id(), 
-                    lines_within.fields().indexFromName("intersects"), True)
-            lines_within.commitChanges()
+            self.log("Adding features to output layer...", 92)
+            output_layer.dataProvider().addFeatures(features_to_add)
+            output_layer.updateExtents()
             
-            # Add field to lines_outside and set to False
-            lines_outside.dataProvider().addAttributes([QgsField("intersects", QVariant.Bool)])
-            lines_outside.updateFields()
-            lines_outside.startEditing()
-            for feature in lines_outside.getFeatures():
-                lines_outside.changeAttributeValue(feature.id(), 
-                    lines_outside.fields().indexFromName("intersects"), False)
-            lines_outside.commitChanges()
+            self.result_layer = output_layer
             
-            self.log("Merging results...", 95)
-            
-            # Merge the two layers
-            merge_params = {
-                'LAYERS': [lines_within, lines_outside],
-                'CRS': working_input.crs(),
-                'OUTPUT': 'memory:'
-            }
-            merge_result = processing.run("native:mergevectorlayers", merge_params)
-            self.result_layer = merge_result['OUTPUT']
-            self.result_layer.setName(self.output_name)
-            
-            total_count = within_count + outside_count
-            self.log(f"Analysis complete! Total: {total_count} segments ({within_count} within, {outside_count} outside)", 100)
+            total_segments = len(features_to_add)
+            self.log(
+                f"Analysis complete! Total input: {total_features} features | "
+                f"Completely inside: {within_count} | "
+                f"Completely outside: {outside_count} | "
+                f"Crossing boundary: {crossing_count} | "
+                f"Total output segments: {total_segments}",
+                100
+            )
             
             return True
             
@@ -200,6 +246,8 @@ class QCAnalysisTask(QgsTask):
             self.exception = e
             error_msg = f"Error in analysis: {str(e)}"
             QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Critical)
+            import traceback
+            QgsMessageLog.logMessage(traceback.format_exc(), "GeoLinesQC", Qgis.Critical)
             self.log(error_msg, None)
             return False
     
@@ -435,9 +483,9 @@ class GeolinesQCPlugin:
         # Show message bar
         self.iface.messageBar().pushMessage(
             "GeoLines QC",
-            "Analysis started in background. Check progress dialog and task manager.",
+            "Analysis started. Using optimized spatial logic (no expensive difference operation on all features).",
             level=Qgis.Info,
-            duration=3
+            duration=5
         )
         
         # Close settings dialog
@@ -450,7 +498,7 @@ class GeolinesQCPlugin:
             self.progress_dialog.setValue(value)
             
             # Also update message bar occasionally for key steps
-            if value in [30, 50, 70, 90]:
+            if value in [25, 40, 50, 70, 92]:
                 self.iface.messageBar().pushMessage(
                     "GeoLines QC",
                     message,
@@ -501,7 +549,7 @@ class GeolinesQCPlugin:
             # Show success message in message bar
             self.iface.messageBar().pushMessage(
                 "✓ Analysis Complete",
-                f"Layer '{result_layer.name()}' added to map | {within_count} within, {outside_count} outside buffer",
+                f"Layer '{result_layer.name()}' added | {within_count} within, {outside_count} outside buffer",
                 level=Qgis.Success,
                 duration=10
             )
