@@ -8,10 +8,8 @@ from qgis.core import (
     QgsFeature,
     QgsGeometry,
     QgsPointXY,
-    QgsField,
     QgsCoordinateReferenceSystem,
 )
-from qgis.PyQt.QtCore import QVariant
 import os
 
 

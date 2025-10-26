@@ -3,38 +3,58 @@
 Tests for GeoLines QC plugin with visualization
 """
 
-import pytest
 import os
+import sys
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.collections import LineCollection
-import numpy as np
+import warnings
 
+from processing.core.Processing import Processing
+from qgis import processing
+
+from matplotlib.collections import LineCollection
 from qgis.core import (
-    QgsApplication,
-    QgsVectorLayer,
-    QgsProject,
-    QgsGeometry,
-    QgsPointXY,
+    QgsCoordinateReferenceSystem,
     QgsFeature,
     QgsField,
-    QgsCoordinateReferenceSystem,
+    QgsGeometry,
+    QgsPointXY,
+    QgsProject,
+    QgsVectorLayer,
+    Qgis,
 )
 from qgis.PyQt.QtCore import QVariant
 from qgis.testing import start_app, unittest
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 # Initialize QGIS application FIRST
 QGIS_APP = start_app()
 
-# NOW import and initialize processing
-from qgis import processing
-from processing.core.Processing import Processing
 
-# Import your plugin
-import sys
+def create_intersects_field():
+    """
+    Create the intersects Boolean field - compatible across QGIS versions
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from GeoLinesQC.geolines_qc_plugin import QCAnalysisTask
+    Supports:
+    - QGIS 3.34 (GitHub Actions CI)
+    - QGIS 3.40 (Bratislava)
+    - QGIS 3.42+ (Münster)
+    """
+    qgis_version = Qgis.versionInt()
+
+    if qgis_version >= 34000:  # QGIS 3.40+
+        try:
+            from qgis.PyQt.QtCore import QMetaType
+            field = QgsField(name="intersects", type=QMetaType.Type.Bool, typeName="Bool")
+            return field
+        except (ImportError, AttributeError, TypeError):
+            pass  # Fall through to legacy API
+
+    # Legacy API for QGIS 3.34 and fallback
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        field = QgsField("intersects", QVariant.Bool)
+        return field
 
 
 class TestGeoLinesQC(unittest.TestCase):
@@ -460,7 +480,7 @@ Quality score: {quality_score:.1f}%"""
         self.assertEqual(total_count, within_count + outside_count)
         self.assertAlmostEqual(total_length, within_length + outside_length, places=2)
 
-        print(f"\nStatistics:")
+        print("\nStatistics:")
         print(f"  Total: {total_count} features, {total_length:.2f}m")
         print(f"  Within: {within_count} features, {within_length:.2f}m")
         print(f"  Outside: {outside_count} features, {outside_length:.2f}m")
@@ -580,11 +600,12 @@ Quality score: {quality_score:.1f}%"""
         for feature in far_segments:
             self.assertFalse(
                 feature["intersects"],
-                f"Segment far from reference should not intersect",
+                "Segment far from reference should not intersect",
             )
 
-
-    @unittest.skip("Real world data are too complexe for now...")
+    # @unittest.skip("Real world data are too complexe for now...")
+    # The test assertion is very picky, generate the result data with `generate_expected_ouput.py`
+    # Alternatively, we may use a more lenient way to compare lines (i.e. only the length)
     def test_real_world_data(self):
         """Test 10: Real-world data validation"""
         # Check if test data files exist
@@ -800,7 +821,7 @@ Quality score: {quality_score:.1f}%"""
         ax_stats.text(
             0.1,
             0.9,
-            "📊 STATISTICS COMPARISON",
+            "▇▆▅▂ STATISTICS COMPARISON",
             transform=ax_stats.transAxes,
             fontsize=14,
             fontweight="bold",
@@ -821,7 +842,7 @@ Quality score: {quality_score:.1f}%"""
         # Add match indicator
         match_indicator = self.check_results_match(result_stats, expected_stats)
         match_color = "green" if match_indicator["match"] else "orange"
-        match_symbol = "✅" if match_indicator["match"] else "⚠️"
+        match_symbol = "✓" if match_indicator["match"] else "⚠"
 
         ax_stats.text(
             0.1,
@@ -857,7 +878,7 @@ Quality score: {quality_score:.1f}%"""
         )
         plt.close()
 
-        print("  📊 Plot saved: test_10_real_world_data.png")
+        print("  ▇▆▅▂ Plot saved: test_10_real_world_data.png")
 
     def create_stats_comparison_text(self, result_stats, expected_stats):
         """Create formatted statistics comparison text"""
@@ -869,7 +890,7 @@ Quality score: {quality_score:.1f}%"""
             elif abs(diff) < max(2, expected * 0.05):
                 return f"~{diff:+d}"
             else:
-                return f"❌ {diff:+d}"
+                return f"× {diff:+d}"
 
         def format_length_diff(actual, expected):
             diff = actual - expected
@@ -878,7 +899,7 @@ Quality score: {quality_score:.1f}%"""
             elif abs(diff) < expected * 0.01:
                 return f"~{diff:+.1f}m"
             else:
-                return f"❌ {diff:+.1f}m"
+                return f"× {diff:+.1f}m"
 
         text = f"""
     ┌─────────────────────────────────────┐
@@ -899,7 +920,7 @@ Quality score: {quality_score:.1f}%"""
     │ Quality score   {expected_stats["quality_score"]:5.1f}%     {result_stats["quality_score"]:5.1f}%  │
     └─────────────────────────────────────┘
 
-    Legend: ✓ = match, ~ = close, ❌ = diff
+    Legend: ✓ = match, ~ = close, × = diff
     """
         return text
 
@@ -1037,9 +1058,7 @@ Quality score: {quality_score:.1f}%"""
         lines_outside = difference_result["OUTPUT"]
 
         # Step 4: Add 'intersects' field to both
-        lines_within.dataProvider().addAttributes(
-            [QgsField("intersects", QVariant.Bool)]
-        )
+        lines_within.dataProvider().addAttributes([create_intersects_field()])
         lines_within.updateFields()
         lines_within.startEditing()
         for feature in lines_within.getFeatures():
@@ -1048,9 +1067,7 @@ Quality score: {quality_score:.1f}%"""
             )
         lines_within.commitChanges()
 
-        lines_outside.dataProvider().addAttributes(
-            [QgsField("intersects", QVariant.Bool)]
-        )
+        lines_outside.dataProvider().addAttributes([create_intersects_field()])
         lines_outside.updateFields()
         lines_outside.startEditing()
         for feature in lines_outside.getFeatures():
@@ -1155,7 +1172,7 @@ Quality score: {quality_score:.1f}%"""
         )
         plt.close()
 
-        print(f"  📊 Plot saved: {filename}")
+        print(f"  ▇▆▅▂ Plot saved: {filename}")
 
     def plot_on_axis(
         self, ax, input_layer, reference_layer, result_layer, buffer_distance, title

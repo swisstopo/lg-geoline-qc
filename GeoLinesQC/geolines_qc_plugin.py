@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import warnings
 
 from qgis import processing
 from qgis.core import (
@@ -14,7 +15,7 @@ from qgis.core import (
     QgsTask,
     QgsApplication,
 )
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
+from qgis.PyQt.QtCore import QCoreApplication, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -29,6 +30,7 @@ from qgis.PyQt.QtWidgets import (
     QProgressDialog,
     QCheckBox,
 )
+from qgis.PyQt.QtCore import QVariant
 
 
 DEFAULT_BUFFER = 500.0
@@ -41,6 +43,33 @@ if hasattr(QApplication, "setAttribute"):
 
 # Set the environment variable for auto screen scaling
 os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
+
+
+def create_intersects_field(name="intersects"):
+    """
+    Create the intersects Boolean field - compatible across QGIS versions
+
+    Supports:
+    - QGIS 3.34 (GitHub Actions CI)
+    - QGIS 3.40 (Bratislava)
+    - QGIS 3.42+ (Münster)
+    """
+    qgis_version = Qgis.versionInt()
+
+    if qgis_version >= 34000:  # QGIS 3.40+
+        try:
+            from qgis.PyQt.QtCore import QMetaType
+
+            field = QgsField(name=name, type=QMetaType.Type.Bool, typeName="Bool")
+            return field
+        except (ImportError, AttributeError, TypeError):
+            pass  # Fall through to legacy API
+
+    # Legacy API for QGIS 3.34 and fallback
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        field = QgsField(name, QVariant.Bool)
+        return field
 
 
 class QCAnalysisTask(QgsTask):
@@ -261,8 +290,8 @@ class QCAnalysisTask(QgsTask):
             )
             output_layer.dataProvider().addAttributes(
                 [
-                    QgsField("intersects", QVariant.Bool),
-                    QgsField("is_boundary", QVariant.Bool),
+                    create_intersects_field(name="intersects"),
+                    create_intersects_field(name="is_boundary"),
                 ]
             )
             output_layer.updateFields()
