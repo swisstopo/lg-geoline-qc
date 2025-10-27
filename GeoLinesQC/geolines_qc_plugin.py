@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 
 import os
-from datetime import datetime
 
 from qgis import processing
 from qgis.core import (
     Qgis,
-    QgsFeature,
     QgsField,
     QgsGeometry,
     QgsMessageLog,
     QgsProject,
     QgsRectangle,
     QgsVectorLayer,
-    QgsProcessingFeatureSourceDefinition,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsTask,
     QgsApplication,
     QgsWkbTypes,
     QgsSpatialIndex,
+    QgsFeatureRequest,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
@@ -38,7 +36,12 @@ from qgis.PyQt.QtWidgets import (
 
 
 DEFAULT_BUFFER = 500.0
-DIALOG_WIDTH = 400
+DIALOG_WIDTH = 500
+
+# Enable high DPI scaling
+if hasattr(QApplication, "setAttribute"):
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 
 class QCAnalysisTask(QgsTask):
@@ -111,6 +114,20 @@ class QCAnalysisTask(QgsTask):
                 35,
             )
 
+            # Log optimization info
+            if not self.region_layer:
+                original_ref_count = self.reference_layer.featureCount()
+                reduction_pct = (
+                    (1 - ref_count / original_ref_count) * 100
+                    if original_ref_count > 0
+                    else 0
+                )
+                self.log(
+                    f"Optimization: Reduced reference from {original_ref_count} to {ref_count} features "
+                    f"({reduction_pct:.1f}% reduction)",
+                    Qgis.Info,
+                )
+
             if ref_count == 0:
                 raise Exception(
                     "No reference features in the working area. Check your region filter or input extent."
@@ -146,18 +163,46 @@ class QCAnalysisTask(QgsTask):
                 lines_within, lines_outside, working_input
             )
 
+            # Calculate detailed statistics
             within_count = sum(
                 1 for f in self.result_layer.getFeatures() if f["intersects"]
             )
             outside_count = sum(
                 1 for f in self.result_layer.getFeatures() if not f["intersects"]
             )
+            total_count = within_count + outside_count
+
+            # Calculate lengths for quality assessment
+            within_length = sum(
+                f.geometry().length()
+                for f in self.result_layer.getFeatures()
+                if f["intersects"]
+            )
+            outside_length = sum(
+                f.geometry().length()
+                for f in self.result_layer.getFeatures()
+                if not f["intersects"]
+            )
+            total_length = within_length + outside_length
+            quality_pct = (
+                (within_length / total_length * 100) if total_length > 0 else 0
+            )
 
             self.log(
-                f"Analysis complete! {within_count} segments within, {outside_count} outside buffer",
+                f"Analysis complete! Within: {within_count} ({within_length:.1f}m), "
+                f"Outside: {outside_count} ({outside_length:.1f}m), Quality: {quality_pct:.1f}%",
                 Qgis.Success,
                 100,
             )
+
+            # Warn if most lines are outside buffer
+            if outside_count > within_count * 2:
+                self.log(
+                    f"⚠ Warning: {outside_count} segments outside vs {within_count} inside buffer. "
+                    f"Consider checking: (1) Buffer distance ({self.buffer_distance}m), "
+                    f"(2) Reference layer alignment, (3) Input layer quality",
+                    Qgis.Warning,
+                )
 
             return True
 
@@ -216,7 +261,7 @@ class QCAnalysisTask(QgsTask):
         return clipped_input, clipped_reference
 
     def _filter_layer_by_geometry(self, input_layer, filter_geom, filter_bbox):
-        """Filter a layer by intersection with a geometry - most reliable method"""
+        """Filter a layer by intersection with a geometry - optimized with QgsFeatureRequest"""
         # Create output memory layer
         filtered_layer = QgsVectorLayer(
             f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
@@ -228,9 +273,14 @@ class QCAnalysisTask(QgsTask):
         filtered_provider.addAttributes(input_layer.fields())
         filtered_layer.updateFields()
 
+        # Use QgsFeatureRequest to get only features in the bounding box first
+        # This is MUCH faster than iterating all features
+        request = QgsFeatureRequest()
+        request.setFilterRect(filter_bbox)
+
         # Filter features
         filtered_features = []
-        for feat in input_layer.getFeatures():
+        for feat in input_layer.getFeatures(request):
             if self.isCanceled() or self.feedback.isCanceled():
                 break
 
@@ -238,11 +288,7 @@ class QCAnalysisTask(QgsTask):
             if not feat_geom:
                 continue
 
-            # Quick bbox check first
-            if not feat_geom.boundingBox().intersects(filter_bbox):
-                continue
-
-            # Then precise intersection test
+            # Precise intersection test (only on bbox-filtered features)
             if feat_geom.intersects(filter_geom):
                 filtered_features.append(feat)
 
@@ -361,7 +407,7 @@ class QCAnalysisTask(QgsTask):
         """
         Filter reference layer to an expanded bounding box of input layer.
         This optimizes performance when no regional filter is provided.
-        Uses direct filtering instead of clip operations for reliability.
+        Uses QgsFeatureRequest for efficient spatial filtering.
         """
         self.log(
             "Optimizing: filtering reference to input extent + buffer...", Qgis.Info, 10
@@ -394,15 +440,18 @@ class QCAnalysisTask(QgsTask):
         filtered_provider.addAttributes(reference_layer.fields())
         filtered_layer.updateFields()
 
-        # Filter features by bounding box
+        # Use QgsFeatureRequest with spatial filter for FAST filtering
+        # This uses QGIS's spatial index internally - much faster than manual iteration!
+        request = QgsFeatureRequest()
+        request.setFilterRect(expanded_extent)
+        request.setFlags(QgsFeatureRequest.ExactIntersect)
+
+        # Get filtered features efficiently
         filtered_features = []
-        for feat in reference_layer.getFeatures():
+        for feat in reference_layer.getFeatures(request):
             if self.isCanceled() or self.feedback.isCanceled():
                 break
-
-            feat_geom = feat.geometry()
-            if feat_geom and feat_geom.boundingBox().intersects(expanded_extent):
-                filtered_features.append(feat)
+            filtered_features.append(feat)
 
         # Add filtered features to output layer
         filtered_provider.addFeatures(filtered_features)
@@ -410,7 +459,9 @@ class QCAnalysisTask(QgsTask):
 
         ref_count = len(filtered_features)
         self.log(
-            f"Reference layer filtered to extent: {ref_count} features", Qgis.Info, 30
+            f"Reference layer filtered to extent: {ref_count} features (fast!)",
+            Qgis.Info,
+            30,
         )
 
         return filtered_layer
