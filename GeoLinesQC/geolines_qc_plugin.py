@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
 
 import os
+from datetime import datetime
 
 from qgis import processing
 from qgis.core import (
     Qgis,
+    QgsFeature,
     QgsField,
     QgsGeometry,
     QgsMessageLog,
     QgsProject,
     QgsRectangle,
     QgsVectorLayer,
+    QgsProcessingFeatureSourceDefinition,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsTask,
@@ -37,6 +40,8 @@ from qgis.PyQt.QtWidgets import (
 
 DEFAULT_BUFFER = 500.0
 DIALOG_WIDTH = 500
+CHUNK_SIZE = 100  # Process features in chunks for better feedback
+
 
 # Enable high DPI scaling
 if hasattr(QApplication, "setAttribute"):
@@ -138,29 +143,73 @@ class QCAnalysisTask(QgsTask):
                     "No input features in the working area. Check your region filter."
                 )
 
-            # Step 2: Buffer the reference layer
+            # Step 1.5: Separate boundary lines from regular lines
+            boundary_lines, regular_lines = self._separate_boundary_lines(working_input)
+            boundary_count = boundary_lines.featureCount() if boundary_lines else 0
+            regular_count = regular_lines.featureCount() if regular_lines else 0
+
+            if boundary_count > 0:
+                self.log(
+                    f"Detected {boundary_count} boundary lines (zero tolerance) and {regular_count} regular lines",
+                    Qgis.Info,
+                    38,
+                )
+            else:
+                self.log(
+                    f"No boundary lines detected, processing {regular_count} regular lines",
+                    Qgis.Info,
+                    38,
+                )
+
+            # Step 2: Buffer the reference layer for regular lines
             self.log(
                 f"Creating {self.buffer_distance}m buffer around reference layer...",
                 Qgis.Info,
                 40,
             )
             buffered_reference = self._create_buffer(working_reference)
-            self.log("Buffer created successfully", Qgis.Info, 55)
+            self.log("Buffer created successfully", Qgis.Info, 50)
 
             if self.isCanceled() or self.feedback.isCanceled():
                 return False
 
-            # Step 3: Split input lines by buffer intersection
-            lines_within, lines_outside = self._split_by_buffer(
-                working_input, buffered_reference
-            )
+            # Step 3: Process regular lines with buffer - OPTIMIZED METHOD
+            if regular_count > 0:
+                # NEW: Use optimized spatial index-based splitting
+                regular_within, regular_outside = self._split_by_buffer_optimized(
+                    regular_lines, buffered_reference
+                )
+            else:
+                regular_within = None
+                regular_outside = None
 
             if self.isCanceled() or self.feedback.isCanceled():
                 return False
 
-            # Step 4: Merge results with tagging
-            self.result_layer = self._merge_and_tag(
-                lines_within, lines_outside, working_input
+            # Step 4: Process boundary lines with zero tolerance (exact match)
+            if boundary_count > 0:
+                self.log(
+                    "Processing boundary lines with zero tolerance (exact match)...",
+                    Qgis.Info,
+                    87,
+                )
+                boundary_within, boundary_outside = self._process_boundary_lines(
+                    boundary_lines, working_reference
+                )
+            else:
+                boundary_within = None
+                boundary_outside = None
+
+            if self.isCanceled() or self.feedback.isCanceled():
+                return False
+
+            # Step 5: Merge all results with tagging
+            self.result_layer = self._merge_and_tag_all(
+                regular_within,
+                regular_outside,
+                boundary_within,
+                boundary_outside,
+                working_input,
             )
 
             # Calculate detailed statistics
@@ -187,6 +236,28 @@ class QCAnalysisTask(QgsTask):
             quality_pct = (
                 (within_length / total_length * 100) if total_length > 0 else 0
             )
+
+            # Calculate boundary-specific stats if applicable
+            # Check if is_boundary field exists
+            has_boundary_field = "is_boundary" in [
+                field.name() for field in self.result_layer.fields()
+            ]
+
+            if boundary_count > 0 and has_boundary_field:
+                boundary_within_count = sum(
+                    1
+                    for f in self.result_layer.getFeatures()
+                    if f["intersects"] and f["is_boundary"]
+                )
+                boundary_outside_count = sum(
+                    1
+                    for f in self.result_layer.getFeatures()
+                    if not f["intersects"] and f["is_boundary"]
+                )
+                self.log(
+                    f"Boundary lines: {boundary_within_count} exact matches, {boundary_outside_count} no match",
+                    Qgis.Info,
+                )
 
             self.log(
                 f"Analysis complete! Within: {within_count} ({within_length:.1f}m), "
@@ -216,6 +287,448 @@ class QCAnalysisTask(QgsTask):
             QgsMessageLog.logMessage(tb, "GeoLinesQC", Qgis.Critical)
             self.log(error_msg, Qgis.Critical)
             return False
+
+    def _split_by_buffer_optimized(self, input_layer, buffered_reference):
+        """
+        OPTIMIZED: Split input lines using spatial index pre-filtering and chunked processing.
+        This is MUCH faster than using native:intersection and native:difference on large datasets.
+        """
+        self.log("Building spatial index for buffer zone...", Qgis.Info, 52)
+
+        # Get the buffer geometry (should be a single dissolved geometry)
+        buffer_geom = None
+        for feat in buffered_reference.getFeatures():
+            buffer_geom = feat.geometry()
+            break  # Should only be one feature after dissolve
+
+        if not buffer_geom:
+            raise Exception("Buffer geometry is empty!")
+
+        buffer_bbox = buffer_geom.boundingBox()
+
+        # Create output memory layers
+        within_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
+            "within_buffer",
+            "memory",
+        )
+        outside_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
+            "outside_buffer",
+            "memory",
+        )
+
+        # Copy field structure
+        within_layer.dataProvider().addAttributes(input_layer.fields())
+        within_layer.updateFields()
+        outside_layer.dataProvider().addAttributes(input_layer.fields())
+        outside_layer.updateFields()
+
+        # Collect features for batch insertion (much faster)
+        within_features = []
+        outside_features = []
+
+        # Get total count for progress reporting
+        total_features = input_layer.featureCount()
+        processed = 0
+
+        # Quick pre-filter: features completely outside buffer bbox go straight to "outside"
+        self.log(f"Pre-filtering {total_features} input features...", Qgis.Info, 55)
+
+        features_to_check = []
+        for feat in input_layer.getFeatures():
+            if self.isCanceled() or self.feedback.isCanceled():
+                return None, None
+
+            feat_bbox = feat.geometry().boundingBox()
+
+            # Quick bbox check: if feature bbox doesn't intersect buffer bbox, it's definitely outside
+            if not feat_bbox.intersects(buffer_bbox):
+                outside_features.append(feat)
+            else:
+                # Need to check geometry intersection
+                features_to_check.append(feat)
+
+            processed += 1
+            if processed % 500 == 0:
+                progress = 55 + int((processed / total_features) * 10)
+                self.log(
+                    f"Pre-filtered {processed}/{total_features} features ({len(outside_features)} clearly outside)...",
+                    Qgis.Info,
+                    progress,
+                )
+
+        self.log(
+            f"Pre-filter complete: {len(features_to_check)} need geometry check, "
+            f"{len(outside_features)} clearly outside buffer",
+            Qgis.Info,
+            65,
+        )
+
+        # Now process features that need actual geometry intersection check
+        processed = 0
+        total_to_check = len(features_to_check)
+
+        self.log(
+            f"Checking intersection for {total_to_check} features...",
+            Qgis.Info,
+            66,
+        )
+
+        for feat in features_to_check:
+            if self.isCanceled() or self.feedback.isCanceled():
+                return None, None
+
+            feat_geom = feat.geometry()
+
+            # Test if feature geometry intersects buffer
+            if feat_geom.intersects(buffer_geom):
+                # Feature intersects buffer - need to split it
+                intersection = feat_geom.intersection(buffer_geom)
+                difference = feat_geom.difference(buffer_geom)
+
+                # Add intersecting part (if not empty)
+                if intersection and not intersection.isEmpty():
+                    within_feat = QgsFeature(feat)
+                    within_feat.setGeometry(intersection)
+                    within_features.append(within_feat)
+
+                # Add non-intersecting part (if not empty)
+                if difference and not difference.isEmpty():
+                    outside_feat = QgsFeature(feat)
+                    outside_feat.setGeometry(difference)
+                    outside_features.append(outside_feat)
+            else:
+                # Feature doesn't intersect buffer at all
+                outside_features.append(feat)
+
+            processed += 1
+
+            # Update progress every 100 features
+            if processed % 100 == 0 or processed == total_to_check:
+                progress = 66 + int((processed / total_to_check) * 20)
+                self.log(
+                    f"Processed {processed}/{total_to_check} features "
+                    f"({len(within_features)} within, {len(outside_features)} outside)...",
+                    Qgis.Info,
+                    progress,
+                )
+
+        # Batch insert features (MUCH faster than one-by-one)
+        self.log(
+            f"Finalizing results ({len(within_features)} within, {len(outside_features)} outside)...",
+            Qgis.Info,
+            86,
+        )
+
+        if within_features:
+            within_layer.dataProvider().addFeatures(within_features)
+            within_layer.updateExtents()
+
+        if outside_features:
+            outside_layer.dataProvider().addFeatures(outside_features)
+            outside_layer.updateExtents()
+
+        self.log(
+            f"Split complete: {len(within_features)} segments within, "
+            f"{len(outside_features)} segments outside buffer",
+            Qgis.Info,
+            87,
+        )
+
+        return within_layer, outside_layer
+
+    def _separate_boundary_lines(self, input_layer):
+        """
+        Separate boundary lines from regular lines based on attribute detection.
+        Looks for fields containing 'boundary' (case insensitive) with truthy values.
+        Returns: (boundary_layer, regular_layer)
+        """
+        # Find boundary field (fuzzy match for "boundary" in field names)
+        boundary_field = None
+        for field in input_layer.fields():
+            if "mp_bound" in field.name().lower():
+                boundary_field = field.name()
+                self.log(f"Found boundary field: '{boundary_field}'", Qgis.Info)
+                break
+
+        if not boundary_field:
+            # No boundary field found, all lines are regular
+            return None, input_layer
+
+        # Create memory layers for both types
+        boundary_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
+            "boundary_lines",
+            "memory",
+        )
+        regular_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
+            "regular_lines",
+            "memory",
+        )
+
+        # Copy fields
+        boundary_layer.dataProvider().addAttributes(input_layer.fields())
+        boundary_layer.updateFields()
+        regular_layer.dataProvider().addAttributes(input_layer.fields())
+        regular_layer.updateFields()
+
+        # Separate features based on boundary field value
+        boundary_features = []
+        regular_features = []
+
+        for feat in input_layer.getFeatures():
+            if self.isCanceled() or self.feedback.isCanceled():
+                break
+
+            boundary_value = feat[boundary_field]
+
+            # Check if boundary value is truthy (True, 1, "1", "true", "yes", etc.)
+            is_boundary = False
+            if boundary_value is not None:
+                if isinstance(boundary_value, bool):
+                    is_boundary = boundary_value
+                elif isinstance(boundary_value, (int, float)):
+                    is_boundary = boundary_value != 0
+                elif isinstance(boundary_value, str):
+                    is_boundary = boundary_value.lower() in (
+                        "true",
+                        "1",
+                        "yes",
+                        "t",
+                        "y",
+                    )
+
+            if is_boundary:
+                boundary_features.append(feat)
+            else:
+                regular_features.append(feat)
+
+        # Add features to respective layers
+        if boundary_features:
+            boundary_layer.dataProvider().addFeatures(boundary_features)
+            boundary_layer.updateExtents()
+        else:
+            boundary_layer = None
+
+        if regular_features:
+            regular_layer.dataProvider().addFeatures(regular_features)
+            regular_layer.updateExtents()
+        else:
+            regular_layer = None
+
+        return boundary_layer, regular_layer
+
+    def _process_boundary_lines(self, boundary_lines, reference_layer):
+        """
+        Process boundary lines with zero tolerance - must match reference exactly.
+        Uses geometry equality test instead of buffer intersection.
+        Returns: (matching_lines, non_matching_lines)
+        """
+        # Create spatial index of reference layer for efficiency
+        reference_index = QgsSpatialIndex(reference_layer.getFeatures())
+
+        # Build reference geometry dictionary
+        reference_geoms = {}
+        for ref_feat in reference_layer.getFeatures():
+            reference_geoms[ref_feat.id()] = ref_feat.geometry()
+
+        # Create output layers
+        matching_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(boundary_lines.wkbType())}?crs={boundary_lines.crs().authid()}",
+            "boundary_matches",
+            "memory",
+        )
+        non_matching_layer = QgsVectorLayer(
+            f"{QgsWkbTypes.displayString(boundary_lines.wkbType())}?crs={boundary_lines.crs().authid()}",
+            "boundary_no_matches",
+            "memory",
+        )
+
+        matching_layer.dataProvider().addAttributes(boundary_lines.fields())
+        matching_layer.updateFields()
+        non_matching_layer.dataProvider().addAttributes(boundary_lines.fields())
+        non_matching_layer.updateFields()
+
+        matching_features = []
+        non_matching_features = []
+
+        # Check each boundary line for exact match
+        for feat in boundary_lines.getFeatures():
+            if self.isCanceled() or self.feedback.isCanceled():
+                break
+
+            feat_geom = feat.geometry()
+            feat_bbox = feat_geom.boundingBox()
+
+            # Get candidate reference features using spatial index
+            candidate_ids = reference_index.intersects(feat_bbox)
+
+            # Test for exact geometry match with candidates
+            exact_match_found = False
+            for ref_id in candidate_ids:
+                ref_geom = reference_geoms[ref_id]
+
+                # Check if geometries are equal (within tiny tolerance for float precision)
+                if feat_geom.equals(ref_geom):
+                    exact_match_found = True
+                    break
+
+            if exact_match_found:
+                matching_features.append(feat)
+            else:
+                non_matching_features.append(feat)
+
+        # Add features to layers
+        if matching_features:
+            matching_layer.dataProvider().addFeatures(matching_features)
+            matching_layer.updateExtents()
+
+        if non_matching_features:
+            non_matching_layer.dataProvider().addFeatures(non_matching_features)
+            non_matching_layer.updateExtents()
+
+        self.log(
+            f"Boundary lines: {len(matching_features)} exact matches, {len(non_matching_features)} no match",
+            Qgis.Info,
+            88,
+        )
+
+        return matching_layer, non_matching_layer
+
+    def _merge_and_tag_all(
+        self,
+        regular_within,
+        regular_outside,
+        boundary_within,
+        boundary_outside,
+        original_layer,
+    ):
+        """
+        Merge all line segments (regular and boundary) and add 'intersects' and 'is_boundary' fields.
+        """
+        self.log("Tagging and merging all line segments...", Qgis.Info, 90)
+
+        layers_to_merge = []
+
+        # Process regular lines within buffer
+        if regular_within and regular_within.featureCount() > 0:
+            regular_within.dataProvider().addAttributes(
+                [
+                    QgsField("intersects", QVariant.Bool),
+                    QgsField("is_boundary", QVariant.Bool),
+                ]
+            )
+            regular_within.updateFields()
+            regular_within.startEditing()
+            for feature in regular_within.getFeatures():
+                regular_within.changeAttributeValue(
+                    feature.id(),
+                    regular_within.fields().indexFromName("intersects"),
+                    True,
+                )
+                regular_within.changeAttributeValue(
+                    feature.id(),
+                    regular_within.fields().indexFromName("is_boundary"),
+                    False,
+                )
+            regular_within.commitChanges()
+            layers_to_merge.append(regular_within)
+
+        # Process regular lines outside buffer
+        if regular_outside and regular_outside.featureCount() > 0:
+            regular_outside.dataProvider().addAttributes(
+                [
+                    QgsField("intersects", QVariant.Bool),
+                    QgsField("is_boundary", QVariant.Bool),
+                ]
+            )
+            regular_outside.updateFields()
+            regular_outside.startEditing()
+            for feature in regular_outside.getFeatures():
+                regular_outside.changeAttributeValue(
+                    feature.id(),
+                    regular_outside.fields().indexFromName("intersects"),
+                    False,
+                )
+                regular_outside.changeAttributeValue(
+                    feature.id(),
+                    regular_outside.fields().indexFromName("is_boundary"),
+                    False,
+                )
+            regular_outside.commitChanges()
+            layers_to_merge.append(regular_outside)
+
+        # Process boundary lines with exact matches
+        if boundary_within and boundary_within.featureCount() > 0:
+            boundary_within.dataProvider().addAttributes(
+                [
+                    QgsField("intersects", QVariant.Bool),
+                    QgsField("is_boundary", QVariant.Bool),
+                ]
+            )
+            boundary_within.updateFields()
+            boundary_within.startEditing()
+            for feature in boundary_within.getFeatures():
+                boundary_within.changeAttributeValue(
+                    feature.id(),
+                    boundary_within.fields().indexFromName("intersects"),
+                    True,
+                )
+                boundary_within.changeAttributeValue(
+                    feature.id(),
+                    boundary_within.fields().indexFromName("is_boundary"),
+                    True,
+                )
+            boundary_within.commitChanges()
+            layers_to_merge.append(boundary_within)
+
+        # Process boundary lines without matches
+        if boundary_outside and boundary_outside.featureCount() > 0:
+            boundary_outside.dataProvider().addAttributes(
+                [
+                    QgsField("intersects", QVariant.Bool),
+                    QgsField("is_boundary", QVariant.Bool),
+                ]
+            )
+            boundary_outside.updateFields()
+            boundary_outside.startEditing()
+            for feature in boundary_outside.getFeatures():
+                boundary_outside.changeAttributeValue(
+                    feature.id(),
+                    boundary_outside.fields().indexFromName("intersects"),
+                    False,
+                )
+                boundary_outside.changeAttributeValue(
+                    feature.id(),
+                    boundary_outside.fields().indexFromName("is_boundary"),
+                    True,
+                )
+            boundary_outside.commitChanges()
+            layers_to_merge.append(boundary_outside)
+
+        if not layers_to_merge:
+            raise Exception("No features to merge - this should not happen!")
+
+        self.log("Merging all results...", Qgis.Info, 95)
+
+        # Merge all layers
+        merge_params = {
+            "LAYERS": layers_to_merge,
+            "CRS": original_layer.crs(),
+            "OUTPUT": "memory:",
+        }
+        merge_result = processing.run(
+            "native:mergevectorlayers",
+            merge_params,
+            context=self.context,
+            feedback=self.feedback,
+        )
+        result_layer = merge_result["OUTPUT"]
+        result_layer.setName(self.output_name)
+
+        return result_layer
 
     def _clip_to_region(self):
         """Clip both input and reference layers to the region using spatial filtering"""
@@ -298,111 +811,6 @@ class QCAnalysisTask(QgsTask):
 
         return filtered_layer
 
-    def _prepare_region_layer(self):
-        """
-        Prepare region layer for clipping by creating a memory layer
-        with selected features or all features
-        """
-        # Create memory layer for region
-        region_memory = QgsVectorLayer(
-            f"Polygon?crs={self.region_layer.crs().authid()}", "region_temp", "memory"
-        )
-        region_provider = region_memory.dataProvider()
-
-        # Get features (selected or all)
-        if self.region_layer.selectedFeatureCount() > 0:
-            features = list(self.region_layer.getSelectedFeatures())
-            self.log(
-                f"Using {len(features)} selected features from region layer", Qgis.Info
-            )
-        else:
-            features = list(self.region_layer.getFeatures())
-            self.log(f"Using all {len(features)} features from region layer", Qgis.Info)
-
-        # Add features to memory layer
-        region_provider.addFeatures(features)
-        region_memory.updateExtents()
-
-        return region_memory
-
-    def _clip_layer(self, input_layer, overlay_layer):
-        """Extract features using spatial relationship instead of clipping"""
-        self.log("Extracting features by location...", Qgis.Info)
-
-        # Use extract by location instead of clip - more robust in background tasks
-        extract_params = {
-            "INPUT": input_layer,
-            "PREDICATE": [0],  # intersects
-            "INTERSECT": overlay_layer,
-            "OUTPUT": "memory:",
-        }
-
-        try:
-            extract_result = processing.run(
-                "native:extractbylocation",
-                extract_params,
-                context=self.context,
-                feedback=self.feedback,
-            )
-            self.log(
-                f"Extracted {extract_result['OUTPUT'].featureCount()} features",
-                Qgis.Info,
-            )
-            return extract_result["OUTPUT"]
-        except Exception as e:
-            self.log(f"Extract by location failed: {str(e)}", Qgis.Critical)
-            # Last resort: manual filtering with spatial index
-            return self._manual_spatial_filter(input_layer, overlay_layer)
-
-    def _manual_spatial_filter(self, input_layer, overlay_layer):
-        """Manually filter features using spatial index - most robust method"""
-        self.log("Using manual spatial filtering...", Qgis.Warning)
-
-        # Create spatial index for overlay
-        overlay_index = QgsSpatialIndex(overlay_layer.getFeatures())
-
-        # Create output memory layer
-        output_layer = QgsVectorLayer(
-            f"{QgsWkbTypes.displayString(input_layer.wkbType())}?crs={input_layer.crs().authid()}",
-            "filtered",
-            "memory",
-        )
-
-        output_provider = output_layer.dataProvider()
-        output_provider.addAttributes(input_layer.fields())
-        output_layer.updateFields()
-
-        # Get overlay geometries for intersection test
-        overlay_geoms = {}
-        for feat in overlay_layer.getFeatures():
-            overlay_geoms[feat.id()] = feat.geometry()
-
-        # Filter input features
-        filtered_features = []
-        for feat in input_layer.getFeatures():
-            if self.isCanceled() or self.feedback.isCanceled():
-                break
-
-            feat_geom = feat.geometry()
-            # Get candidate IDs from spatial index
-            candidate_ids = overlay_index.intersects(feat_geom.boundingBox())
-
-            # Test actual intersection with candidates
-            intersects = False
-            for overlay_id in candidate_ids:
-                if feat_geom.intersects(overlay_geoms[overlay_id]):
-                    intersects = True
-                    break
-
-            if intersects:
-                filtered_features.append(feat)
-
-        output_provider.addFeatures(filtered_features)
-        output_layer.updateExtents()
-
-        self.log(f"Manually filtered to {len(filtered_features)} features", Qgis.Info)
-        return output_layer
-
     def _clip_to_input_extent(self, reference_layer):
         """
         Filter reference layer to an expanded bounding box of input layer.
@@ -483,96 +891,6 @@ class QCAnalysisTask(QgsTask):
         )
         return buffer_result["OUTPUT"]
 
-    def _split_by_buffer(self, input_layer, buffered_reference):
-        """Split input lines into those within and outside the buffer"""
-        # Step 1: Get lines WITHIN buffer (intersection)
-        self.log("Finding lines within buffer zone...", Qgis.Info, 60)
-        intersect_params = {
-            "INPUT": input_layer,
-            "OVERLAY": buffered_reference,
-            "OUTPUT": "memory:",
-        }
-        intersect_result = processing.run(
-            "native:intersection",
-            intersect_params,
-            context=self.context,
-            feedback=self.feedback,
-        )
-        lines_within = intersect_result["OUTPUT"]
-
-        within_count = lines_within.featureCount()
-        self.log(f"Found {within_count} line segments within buffer", Qgis.Info, 75)
-
-        if self.isCanceled() or self.feedback.isCanceled():
-            return None, None
-
-        # Step 2: Get lines OUTSIDE buffer (difference)
-        self.log("Finding lines outside buffer zone...", Qgis.Info, 80)
-        difference_params = {
-            "INPUT": input_layer,
-            "OVERLAY": buffered_reference,
-            "OUTPUT": "memory:",
-        }
-        difference_result = processing.run(
-            "native:difference",
-            difference_params,
-            context=self.context,
-            feedback=self.feedback,
-        )
-        lines_outside = difference_result["OUTPUT"]
-
-        outside_count = lines_outside.featureCount()
-        self.log(f"Found {outside_count} line segments outside buffer", Qgis.Info, 85)
-
-        return lines_within, lines_outside
-
-    def _merge_and_tag(self, lines_within, lines_outside, original_layer):
-        """Add 'intersects' field to both layers and merge them"""
-        self.log("Tagging line segments...", Qgis.Info, 90)
-
-        # Add field to lines_within and set to True
-        lines_within.dataProvider().addAttributes(
-            [QgsField("intersects", QVariant.Bool)]
-        )
-        lines_within.updateFields()
-        lines_within.startEditing()
-        for feature in lines_within.getFeatures():
-            lines_within.changeAttributeValue(
-                feature.id(), lines_within.fields().indexFromName("intersects"), True
-            )
-        lines_within.commitChanges()
-
-        # Add field to lines_outside and set to False
-        lines_outside.dataProvider().addAttributes(
-            [QgsField("intersects", QVariant.Bool)]
-        )
-        lines_outside.updateFields()
-        lines_outside.startEditing()
-        for feature in lines_outside.getFeatures():
-            lines_outside.changeAttributeValue(
-                feature.id(), lines_outside.fields().indexFromName("intersects"), False
-            )
-        lines_outside.commitChanges()
-
-        self.log("Merging results...", Qgis.Info, 95)
-
-        # Merge the two layers
-        merge_params = {
-            "LAYERS": [lines_within, lines_outside],
-            "CRS": original_layer.crs(),
-            "OUTPUT": "memory:",
-        }
-        merge_result = processing.run(
-            "native:mergevectorlayers",
-            merge_params,
-            context=self.context,
-            feedback=self.feedback,
-        )
-        result_layer = merge_result["OUTPUT"]
-        result_layer.setName(self.output_name)
-
-        return result_layer
-
     def finished(self, result):
         """Called when task completes"""
         if result:
@@ -604,6 +922,7 @@ class GeolinesQCPlugin:
         self.styles_dir = os.path.join(self.plugin_dir, "styles")
         self.current_task = None
         self.progress_dialog = None
+        self.last_buffer_distance = DEFAULT_BUFFER
 
     def tr(self, message):
         return QCoreApplication.translate("GeoLinesQC", message)
@@ -815,6 +1134,9 @@ class GeolinesQCPlugin:
             output_name,
         )
 
+        # Store buffer distance for statistics display
+        self.last_buffer_distance = buffer_distance
+
         # Connect signals
         self.current_task.progressChanged.connect(self.update_progress)
         self.current_task.analysisComplete.connect(self.on_analysis_complete)
@@ -896,16 +1218,82 @@ class GeolinesQCPlugin:
                 (within_length / total_length * 100) if total_length > 0 else 0
             )
 
-            # Show success message in message bar
-            self.iface.messageBar().pushMessage(
-                "✓ Analysis Complete",
-                f"Layer '{result_layer.name()}' added | {within_count} within, {outside_count} outside",
-                level=Qgis.Success,
-                duration=10,
-            )
+            # Calculate boundary-specific statistics
+            has_boundary_field = "is_boundary" in [
+                field.name() for field in result_layer.fields()
+            ]
+            if has_boundary_field:
+                boundary_match_count = sum(
+                    1
+                    for f in result_layer.getFeatures()
+                    if f["is_boundary"] and f["intersects"]
+                )
+                boundary_no_match_count = sum(
+                    1
+                    for f in result_layer.getFeatures()
+                    if f["is_boundary"] and not f["intersects"]
+                )
+                boundary_total = boundary_match_count + boundary_no_match_count
 
-            # Show detailed statistics dialog
-            stats_message = f"""<b>GeoLines QC Results</b><br><br>
+                regular_within_count = sum(
+                    1
+                    for f in result_layer.getFeatures()
+                    if not f["is_boundary"] and f["intersects"]
+                )
+                regular_outside_count = sum(
+                    1
+                    for f in result_layer.getFeatures()
+                    if not f["is_boundary"] and not f["intersects"]
+                )
+            else:
+                boundary_total = 0
+                boundary_match_count = 0
+                boundary_no_match_count = 0
+                regular_within_count = within_count
+                regular_outside_count = outside_count
+
+            # Show success message in message bar
+            if boundary_total > 0:
+                self.iface.messageBar().pushMessage(
+                    "✓ Analysis Complete",
+                    f"Layer '{result_layer.name()}' added | Regular: {regular_within_count}✓/{regular_outside_count}✗ "
+                    f"| Boundary: {boundary_match_count}✓/{boundary_no_match_count}✗",
+                    level=Qgis.Success,
+                    duration=10,
+                )
+            else:
+                self.iface.messageBar().pushMessage(
+                    "✓ Analysis Complete",
+                    f"Layer '{result_layer.name()}' added | {within_count} within, {outside_count} outside buffer",
+                    level=Qgis.Success,
+                    duration=10,
+                )
+
+            # Build detailed statistics message
+            if boundary_total > 0:
+                stats_message = f"""<b>GeoLines QC Results</b><br><br>
+<b>Overall:</b><br>
+• Within tolerance: {within_count} segments ({within_length:.2f} m)<br>
+• Outside tolerance: {outside_count} segments ({outside_length:.2f} m)<br>
+• Total: {total_count} segments ({total_length:.2f} m)<br>
+• Quality Score: <b>{quality_score:.1f}%</b><br><br>
+
+<b>Regular Lines (Buffer: {self.last_buffer_distance:.0f}m):</b><br>
+• Within buffer: {regular_within_count} segments<br>
+• Outside buffer: {regular_outside_count} segments<br><br>
+
+<b>Boundary Lines (Zero Tolerance):</b><br>
+• Exact matches: {boundary_match_count} segments<br>
+• No matches: {boundary_no_match_count} segments<br>
+• Total boundaries: {boundary_total} segments<br><br>
+
+<i>Green lines = within tolerance / exact match<br>
+Red lines = outside tolerance / no match (need review)</i><br><br>
+
+<b>Note:</b> Boundary lines require exact geometry match with reference.
+"""
+            else:
+                stats_message = f"""<b>GeoLines QC Results</b><br><br>
 <b>Segments:</b><br>
 • Within buffer: {within_count} segments<br>
 • Outside buffer: {outside_count} segments<br>
