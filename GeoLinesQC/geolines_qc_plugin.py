@@ -95,7 +95,7 @@ class QCAnalysisTask(QgsTask):
     def run(self):
         """Execute the analysis in background"""
         try:
-            self.log("Starting GeoLines QC analysis...", Qgis.Info, 0)
+            self.log("━━━ Starting New GeoLines QC analysis ━━━", Qgis.Info, 0)
 
             # Step 1: Determine clipping strategy
             working_input = self.input_layer
