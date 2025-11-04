@@ -150,13 +150,21 @@ class QCAnalysisTask(QgsTask):
 
             if boundary_count > 0:
                 self.log(
-                    f"Detected {boundary_count} boundary lines (zero tolerance) and {regular_count} regular lines",
+                    f"━━━ TWO-TIER PROCESSING ━━━",
                     Qgis.Info,
                     38,
                 )
+                self.log(
+                    f"  → {boundary_count} boundary lines: EXACT match (0m tolerance)",
+                    Qgis.Info,
+                )
+                self.log(
+                    f"  → {regular_count} regular lines: Buffer match ({self.buffer_distance}m tolerance)",
+                    Qgis.Info,
+                )
             else:
                 self.log(
-                    f"No boundary lines detected, processing {regular_count} regular lines",
+                    f"No boundary lines detected, processing {regular_count} regular lines with {self.buffer_distance}m buffer",
                     Qgis.Info,
                     38,
                 )
@@ -255,8 +263,19 @@ class QCAnalysisTask(QgsTask):
                     if not f["intersects"] and f["is_boundary"]
                 )
                 self.log(
-                    f"Boundary lines: {boundary_within_count} exact matches, {boundary_outside_count} no match",
+                    f"━━━ BOUNDARY LINE RESULTS (Exact Match) ━━━",
                     Qgis.Info,
+                )
+                self.log(
+                    f"  ✓ Exact matches: {boundary_within_count} lines",
+                    Qgis.Success if boundary_within_count > 0 else Qgis.Info,
+                )
+                self.log(
+                    f"  ✗ No match: {boundary_outside_count} lines"
+                    + (
+                        " (⚠ REQUIRES ATTENTION!)" if boundary_outside_count > 0 else ""
+                    ),
+                    Qgis.Warning if boundary_outside_count > 0 else Qgis.Info,
                 )
 
             self.log(
@@ -441,19 +460,47 @@ class QCAnalysisTask(QgsTask):
     def _separate_boundary_lines(self, input_layer):
         """
         Separate boundary lines from regular lines based on attribute detection.
-        Looks for fields containing 'boundary' (case insensitive) with truthy values.
+        Boundary lines must match reference exactly (zero tolerance), regardless of buffer distance.
+
+        Looks for fields matching MP_BOUNDARY pattern (case insensitive, handles shapefile truncation).
+        Common variations: MP_BOUNDARY, MP_BOUNDAR (shapefile 10-char limit), mp_boundary, etc.
+
         Returns: (boundary_layer, regular_layer)
         """
-        # Find boundary field (fuzzy match for "boundary" in field names)
+        # Find boundary field (fuzzy match for MP_BOUNDARY variations)
         boundary_field = None
+        field_patterns = [
+            "mp_bound",  # Matches: mp_boundary, mp_boundar, mp_bound
+            "boundary",  # Fallback: any field with 'boundary'
+            "mp bound",  # Space variation
+        ]
+
         for field in input_layer.fields():
-            if "mp_bound" in field.name().lower():
-                boundary_field = field.name()
-                self.log(f"Found boundary field: '{boundary_field}'", Qgis.Info)
+            field_lower = field.name().lower()
+            for pattern in field_patterns:
+                if pattern in field_lower:
+                    boundary_field = field.name()
+                    self.log(
+                        f"✓ Detected boundary field: '{boundary_field}' "
+                        f"(matched pattern: '{pattern}')",
+                        Qgis.Info,
+                    )
+                    self.log(
+                        f"  → Boundary lines will require EXACT match (0m tolerance), "
+                        f"ignoring buffer distance",
+                        Qgis.Info,
+                    )
+                    break
+            if boundary_field:
                 break
 
         if not boundary_field:
             # No boundary field found, all lines are regular
+            self.log(
+                f"ℹ No boundary field detected (searched for: {', '.join(field_patterns)}). "
+                f"All lines will use buffer tolerance.",
+                Qgis.Info,
+            )
             return None, input_layer
 
         # Create memory layers for both types
@@ -477,6 +524,11 @@ class QCAnalysisTask(QgsTask):
         # Separate features based on boundary field value
         boundary_features = []
         regular_features = []
+
+        self.log(
+            f"Examining {input_layer.featureCount()} features for boundary classification...",
+            Qgis.Info,
+        )
 
         for feat in input_layer.getFeatures():
             if self.isCanceled() or self.feedback.isCanceled():
@@ -509,12 +561,22 @@ class QCAnalysisTask(QgsTask):
         if boundary_features:
             boundary_layer.dataProvider().addFeatures(boundary_features)
             boundary_layer.updateExtents()
+            self.log(
+                f"  ✓ Separated {len(boundary_features)} BOUNDARY lines "
+                f"(will require exact match with reference)",
+                Qgis.Info,
+            )
         else:
             boundary_layer = None
 
         if regular_features:
             regular_layer.dataProvider().addFeatures(regular_features)
             regular_layer.updateExtents()
+            self.log(
+                f"  ✓ Separated {len(regular_features)} REGULAR lines "
+                f"(will use {self.buffer_distance}m buffer tolerance)",
+                Qgis.Info,
+            )
         else:
             regular_layer = None
 
@@ -522,10 +584,23 @@ class QCAnalysisTask(QgsTask):
 
     def _process_boundary_lines(self, boundary_lines, reference_layer):
         """
-        Process boundary lines with zero tolerance - must match reference exactly.
-        Uses geometry equality test instead of buffer intersection.
+        Process boundary lines with ZERO tolerance - must match reference EXACTLY.
+
+        These are typically shared lines between modeling projects that must align perfectly.
+        Uses geometry equality test (within floating-point precision) instead of buffer intersection.
+
         Returns: (matching_lines, non_matching_lines)
         """
+        self.log(
+            f"Processing {boundary_lines.featureCount()} boundary lines with EXACT match requirement...",
+            Qgis.Info,
+            87,
+        )
+        self.log(
+            f"  → Checking geometry equality (0m tolerance) against {reference_layer.featureCount()} reference features",
+            Qgis.Info,
+        )
+
         # Create spatial index of reference layer for efficiency
         reference_index = QgsSpatialIndex(reference_layer.getFeatures())
 
@@ -1272,25 +1347,31 @@ class GeolinesQCPlugin:
             # Build detailed statistics message
             if boundary_total > 0:
                 stats_message = f"""<b>GeoLines QC Results</b><br><br>
-<b>Overall:</b><br>
-• Within tolerance: {within_count} segments ({within_length:.2f} m)<br>
-• Outside tolerance: {outside_count} segments ({outside_length:.2f} m)<br>
-• Total: {total_count} segments ({total_length:.2f} m)<br>
-• Quality Score: <b>{quality_score:.1f}%</b><br><br>
+<b>Overall Quality Score: {quality_score:.1f}%</b><br>
+(percentage of line length within tolerance)<br><br>
 
-<b>Regular Lines (Buffer: {self.last_buffer_distance:.0f}m):</b><br>
-• Within buffer: {regular_within_count} segments<br>
-• Outside buffer: {regular_outside_count} segments<br><br>
+<hr>
+<b>📏 Regular Lines (Buffer: {self.last_buffer_distance:.0f}m tolerance):</b><br>
+• ✓ Within buffer: {regular_within_count} segments<br>
+• ✗ Outside buffer: {regular_outside_count} segments<br><br>
 
-<b>Boundary Lines (Zero Tolerance):</b><br>
-• Exact matches: {boundary_match_count} segments<br>
-• No matches: {boundary_no_match_count} segments<br>
+<b>🎯 Boundary Lines (Exact Match - 0m tolerance):</b><br>
+• ✓ Exact matches: <span style='color: green;'><b>{boundary_match_count}</b></span> segments<br>
+• ✗ No matches: <span style='color: red;'><b>{boundary_no_match_count}</b></span> segments{" <b>⚠ REQUIRES ATTENTION!</b>" if boundary_no_match_count > 0 else ""}<br>
 • Total boundaries: {boundary_total} segments<br><br>
 
-<i>Green lines = within tolerance / exact match<br>
-Red lines = outside tolerance / no match (need review)</i><br><br>
+<hr>
+<b>Totals:</b><br>
+• Within tolerance: {within_count} segments ({within_length:.2f} m)<br>
+• Outside tolerance: {outside_count} segments ({outside_length:.2f} m)<br>
+• Total: {total_count} segments ({total_length:.2f} m)<br><br>
 
-<b>Note:</b> Boundary lines require exact geometry match with reference.
+<i><b>Color Legend:</b><br>
+🟢 Green lines = within tolerance / exact match<br>
+🔴 Red lines = outside tolerance / no match (need review)</i><br><br>
+
+<b>Important:</b> Boundary lines (shared between projects) require exact geometry match with reference.<br>
+Non-matching boundary lines indicate alignment issues between projects.
 """
             else:
                 stats_message = f"""<b>GeoLines QC Results</b><br><br>
