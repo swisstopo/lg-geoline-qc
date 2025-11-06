@@ -1,42 +1,41 @@
 # -*- coding: utf-8 -*-
 
 import os
-from datetime import datetime
 
 from qgis import processing
 from qgis.core import (
     Qgis,
+    QgsApplication,
     QgsFeature,
+    QgsFeatureRequest,
     QgsField,
     QgsGeometry,
+    QgsMapLayer,
     QgsMessageLog,
-    QgsProject,
-    QgsRectangle,
-    QgsVectorLayer,
-    QgsProcessingFeatureSourceDefinition,
     QgsProcessingContext,
     QgsProcessingFeedback,
-    QgsTask,
-    QgsApplication,
-    QgsWkbTypes,
+    QgsProject,
+    QgsRectangle,
     QgsSpatialIndex,
-    QgsFeatureRequest,
+    QgsTask,
+    QgsVectorLayer,
+    QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
-    QApplication,
     QAction,
+    QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QLabel,
     QLineEdit,
-    QPushButton,
-    QVBoxLayout,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
+    QVBoxLayout,
 )
-
 
 DEFAULT_BUFFER = 500.0
 DIALOG_WIDTH = 500
@@ -65,6 +64,7 @@ class QCAnalysisTask(QgsTask):
         buffer_distance,
         region_layer=None,
         output_name="QC Result",
+        enable_boundary_check=True,
     ):
         super().__init__(description, QgsTask.CanCancel)
         self.input_layer = input_layer
@@ -74,6 +74,7 @@ class QCAnalysisTask(QgsTask):
         self.output_name = output_name
         self.result_layer = None
         self.exception = None
+        self.enable_boundary_check = enable_boundary_check
 
         # Create processing context and feedback for background task
         self.context = QgsProcessingContext()
@@ -95,7 +96,7 @@ class QCAnalysisTask(QgsTask):
     def run(self):
         """Execute the analysis in background"""
         try:
-            self.log("━━━ Starting New GeoLines QC analysis ━━━", Qgis.Info, 0)
+            self.log("Starting GeoLines QC analysis...", Qgis.Info, 0)
 
             # Step 1: Determine clipping strategy
             working_input = self.input_layer
@@ -143,28 +144,42 @@ class QCAnalysisTask(QgsTask):
                     "No input features in the working area. Check your region filter."
                 )
 
-            # Step 1.5: Separate boundary lines from regular lines
-            boundary_lines, regular_lines = self._separate_boundary_lines(working_input)
-            boundary_count = boundary_lines.featureCount() if boundary_lines else 0
-            regular_count = regular_lines.featureCount() if regular_lines else 0
+            # Step 1.5: Separate boundary lines from regular lines (if enabled)
+            if self.enable_boundary_check:
+                boundary_lines, regular_lines = self._separate_boundary_lines(
+                    working_input
+                )
+                boundary_count = boundary_lines.featureCount() if boundary_lines else 0
+                regular_count = regular_lines.featureCount() if regular_lines else 0
 
-            if boundary_count > 0:
-                self.log(
-                    f"━━━ TWO-TIER PROCESSING ━━━",
-                    Qgis.Info,
-                    38,
-                )
-                self.log(
-                    f"  → {boundary_count} boundary lines: EXACT match (0m tolerance)",
-                    Qgis.Info,
-                )
-                self.log(
-                    f"  → {regular_count} regular lines: Buffer match ({self.buffer_distance}m tolerance)",
-                    Qgis.Info,
-                )
+                if boundary_count > 0:
+                    self.log(
+                        "━━━ TWO-TIER PROCESSING ━━━",
+                        Qgis.Info,
+                        38,
+                    )
+                    self.log(
+                        f"  → {boundary_count} boundary lines: EXACT match (0m tolerance)",
+                        Qgis.Info,
+                    )
+                    self.log(
+                        f"  → {regular_count} regular lines: Buffer match ({self.buffer_distance}m tolerance)",
+                        Qgis.Info,
+                    )
+                else:
+                    self.log(
+                        f"No boundary lines detected, processing {regular_count} regular lines with {self.buffer_distance}m buffer",
+                        Qgis.Info,
+                        38,
+                    )
             else:
+                # Boundary check disabled - treat all lines as regular
+                boundary_lines = None
+                regular_lines = working_input
+                boundary_count = 0
+                regular_count = working_input.featureCount()
                 self.log(
-                    f"No boundary lines detected, processing {regular_count} regular lines with {self.buffer_distance}m buffer",
+                    f"Boundary line processing DISABLED - processing all {regular_count} lines with {self.buffer_distance}m buffer",
                     Qgis.Info,
                     38,
                 )
@@ -263,7 +278,7 @@ class QCAnalysisTask(QgsTask):
                     if not f["intersects"] and f["is_boundary"]
                 )
                 self.log(
-                    f"━━━ BOUNDARY LINE RESULTS (Exact Match) ━━━",
+                    "━━━ BOUNDARY LINE RESULTS (Exact Match) ━━━",
                     Qgis.Info,
                 )
                 self.log(
@@ -316,12 +331,30 @@ class QCAnalysisTask(QgsTask):
 
         # Get the buffer geometry (should be a single dissolved geometry)
         buffer_geom = None
+        buffer_feature_count = 0
         for feat in buffered_reference.getFeatures():
             buffer_geom = feat.geometry()
+            buffer_feature_count += 1
             break  # Should only be one feature after dissolve
 
         if not buffer_geom:
             raise Exception("Buffer geometry is empty!")
+
+        # Log buffer information for debugging
+        buffer_area = buffer_geom.area()
+        buffer_bbox = buffer_geom.boundingBox()
+        self.log(
+            f"Buffer details: {buffer_feature_count} feature(s), "
+            f"area={buffer_area:.2f} m², bbox={buffer_bbox.toString(2)}",
+            Qgis.Info,
+        )
+
+        if buffer_feature_count > 1:
+            self.log(
+                f"⚠ Warning: Expected 1 dissolved buffer feature, got {buffer_feature_count}. "
+                f"Buffer may not be properly dissolved!",
+                Qgis.Warning,
+            )
 
         buffer_bbox = buffer_geom.boundingBox()
 
@@ -455,6 +488,30 @@ class QCAnalysisTask(QgsTask):
             87,
         )
 
+        # Calculate percentages for validation
+        total_segments = len(within_features) + len(outside_features)
+        within_pct = (
+            (len(within_features) / total_segments * 100) if total_segments > 0 else 0
+        )
+        outside_pct = (
+            (len(outside_features) / total_segments * 100) if total_segments > 0 else 0
+        )
+
+        self.log(
+            f"Split results: {within_pct:.1f}% within buffer, {outside_pct:.1f}% outside buffer",
+            Qgis.Info,
+        )
+
+        # Warning if results seem unexpected
+        if outside_pct > 60:
+            self.log(
+                f"⚠ Notice: {outside_pct:.1f}% of segments are outside buffer. "
+                f"This may indicate: (1) Buffer distance too small, "
+                f"(2) Reference layer incomplete, or (3) Poor alignment. "
+                f"Review the buffer layer (Buffer_{self.buffer_distance}m_reference) to verify.",
+                Qgis.Warning,
+            )
+
         return within_layer, outside_layer
 
     def _separate_boundary_lines(self, input_layer):
@@ -486,8 +543,8 @@ class QCAnalysisTask(QgsTask):
                         Qgis.Info,
                     )
                     self.log(
-                        f"  → Boundary lines will require EXACT match (0m tolerance), "
-                        f"ignoring buffer distance",
+                        "  → Boundary lines will require EXACT match (0m tolerance), "
+                        "ignoring buffer distance",
                         Qgis.Info,
                     )
                     break
@@ -964,7 +1021,20 @@ class QCAnalysisTask(QgsTask):
         buffer_result = processing.run(
             "native:buffer", buffer_params, context=self.context, feedback=self.feedback
         )
-        return buffer_result["OUTPUT"]
+        buffered_layer = buffer_result["OUTPUT"]
+
+        # Save buffered layer to project for review (optional debug output)
+        # Set name to identify it
+        buffered_layer.setName(f"Buffer_{self.buffer_distance}m_reference")
+
+        # Add to project so user can review the buffer
+        QgsProject.instance().addMapLayer(buffered_layer, addToLegend=True)
+        self.log(
+            f"✓ Buffer layer added to project: '{buffered_layer.name()}' (for review)",
+            Qgis.Info,
+        )
+
+        return buffered_layer
 
     def finished(self, result):
         """Called when task completes"""
@@ -998,6 +1068,7 @@ class GeolinesQCPlugin:
         self.current_task = None
         self.progress_dialog = None
         self.last_buffer_distance = DEFAULT_BUFFER
+        self.enable_boundary_check = True  # Default: enabled
 
     def tr(self, message):
         return QCoreApplication.translate("GeoLinesQC", message)
@@ -1025,7 +1096,8 @@ class GeolinesQCPlugin:
 
     def get_all_layers_from_tree(self, group=None):
         """
-        Recursively get all layers from layer tree, including nested groups.
+        Recursively get all VECTOR layers from layer tree, including nested groups.
+        Filters out raster layers to prevent crashes.
         Returns a list of tuples: (layer_name, layer_object)
         """
         if group is None:
@@ -1036,6 +1108,11 @@ class GeolinesQCPlugin:
             if hasattr(child, "layer") and child.layer():
                 # It's a layer
                 layer = child.layer()
+
+                # IMPORTANT: Filter out raster layers to prevent crashes
+                if layer.type() != QgsMapLayer.VectorLayer:
+                    continue
+
                 # Get the display name from the tree
                 display_name = child.name()
                 # Check if it's in a group and add group prefix
@@ -1073,6 +1150,16 @@ class GeolinesQCPlugin:
             f"Optional: buffer distance [m] (default: {DEFAULT_BUFFER})"
         )
 
+        # Add checkbox for boundary line processing
+        self.boundary_checkbox = QCheckBox(
+            "Enable boundary line processing (MP_BOUNDARY field)"
+        )
+        self.boundary_checkbox.setChecked(True)  # Default: enabled
+        self.boundary_checkbox.setToolTip(
+            "If checked, lines with MP_BOUNDARY=True will be checked with 0m tolerance.\n"
+            "If unchecked, all lines will use the buffer tolerance."
+        )
+
         layout.addWidget(QLabel("Layer to Check:"))
         layout.addWidget(self.layer1_combo)
         layout.addWidget(QLabel("Reference Layer:"))
@@ -1081,8 +1168,9 @@ class GeolinesQCPlugin:
         layout.addWidget(self.threshold_input)
         layout.addWidget(QLabel("Region Layer (optional):"))
         layout.addWidget(self.region_combo)
+        layout.addWidget(self.boundary_checkbox)  # Add checkbox to layout
 
-        # Get all layers including those in groups
+        # Get all layers including those in groups (now filtered to exclude rasters)
         all_layers = self.get_all_layers_from_tree()
 
         # Store layer objects for later retrieval
@@ -1128,6 +1216,7 @@ class GeolinesQCPlugin:
         layer1_name = self.layer1_combo.currentText()
         layer2_name = self.layer2_combo.currentText()
         region_name = self.region_combo.currentText()
+        enable_boundary = self.boundary_checkbox.isChecked()
 
         try:
             buffer_distance = (
@@ -1207,6 +1296,7 @@ class GeolinesQCPlugin:
             buffer_distance,
             region_layer,
             output_name,
+            enable_boundary,  # Pass checkbox state
         )
 
         # Store buffer distance for statistics display
@@ -1222,9 +1312,12 @@ class GeolinesQCPlugin:
         QgsApplication.taskManager().addTask(self.current_task)
 
         # Show message bar
+        boundary_msg = (
+            " (with boundary check)" if enable_boundary else " (no boundary check)"
+        )
         self.iface.messageBar().pushMessage(
             "GeoLines QC",
-            "Analysis started in background. Check progress dialog and task manager.",
+            f"Analysis started in background{boundary_msg}. Check progress dialog and task manager.",
             level=Qgis.Info,
             duration=3,
         )
