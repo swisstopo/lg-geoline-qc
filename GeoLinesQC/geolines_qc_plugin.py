@@ -96,7 +96,7 @@ class QCAnalysisTask(QgsTask):
     def run(self):
         """Execute the analysis in background"""
         try:
-            self.log("Starting GeoLines QC analysis...", Qgis.Info, 0)
+            self.log("━━━ Starting GeoLines QC analysis ━━━", Qgis.Info, 0)
 
             # Step 1: Determine clipping strategy
             working_input = self.input_layer
@@ -301,7 +301,7 @@ class QCAnalysisTask(QgsTask):
             )
 
             # Warn if most lines are outside buffer
-            if outside_count > within_count * 2:
+            if (outside_count / total_count) > 0.5:
                 self.log(
                     f"⚠ Warning: {outside_count} segments outside vs {within_count} inside buffer. "
                     f"Consider checking: (1) Buffer distance ({self.buffer_distance}m), "
