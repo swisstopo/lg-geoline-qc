@@ -2,3 +2,11 @@
 plugin_path = "GeoLinesQC"
 github_organization_slug = "swisstopo"
 project_slug = "qgis-geolines-qc-plugin"
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+

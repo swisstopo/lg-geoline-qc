@@ -45,3 +45,9 @@ A new temporary file with the combined name of the tested layer will be added to
 with a new field `intersects` set to `True/False`
 
 ![the picture](assets/Results.png)
+
+
+## Testing
+
+Detailed in *[TESTING.md](TESTING.md)*.
+

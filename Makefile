@@ -5,6 +5,10 @@ PYTHON = python3
 RUFF = ruff
 ISORT = isort
 
+VERSION := $(shell python3 -c 'import setuptools_scm; print(setuptools_scm.get_version())')
+
+
+
 # Default target
 all: lint format
 
@@ -37,4 +41,8 @@ clean:
 # Run all checks (lint, format, test)
 check: lint format test
 
-.PHONY: all install test format lint fix clean check
+plugin: clean
+	python update_version.py "GeoLinesQC/metadata.txt" $(VERSION)
+	zip -r GeoLinesQC.$(VERSION).zip GeoLinesQC/
+
+.PHONY: all install test format lint fix clean check plugin
