@@ -4,15 +4,28 @@ QGis plugins to assess quality of digitalized geological lines boundaries agains
 
 ## Installation
 
-To install this plugin, you can download the zip file from the [releases](https://github.com/procrastinatio/lg-geolines-qc/releases) page.
+### From Zip archives
 
-The direct download for the latest version at [here](https://github.com/procrastinatio/lg-geolines-qc/releases/latest).
+To install this plugin, you can download the zip file from the [releases](https://github.com/swisstopo/lg-geoline-qc/releases) page.
+
+The direct download for the latest version at [here](https://github.com/swisstopo/lg-geoline-qc/releases/latest).
 
 Once downloaded, go to  `Plugins -> Install and Manage Plugins... -> Install from ZIP`  and select the file
-you just donwloaded.
+you just downloaded.
 
 You can find the plugins directory by going to `Settings -> System -> Plugins`.
 
+### Using a custom plugins repository
+
+Add the custom plugin repository URL:
+    https://dubious.cloud/qgis/plugins/plugins.xml
+
+to
+    `Plugins -> Install and Manage Plugins... -> Settings -> Plugins repositories -> Add`
+
+You will be automatically notified if new version is published.
+
+![New version notification](assets/New-Version-Notification.png)
 
 ## Usage
 
@@ -36,5 +49,5 @@ with a new field `intersects` set to `True/False`
 
 ## Testing
 
-
 Detailed in *[TESTING.md](TESTING.md)*.
+
