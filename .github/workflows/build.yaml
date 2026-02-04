@@ -1,7 +1,6 @@
 name: Build QGIS Plugin
 'on':
   workflow_call:
-  push:
   pull_request:
 jobs:
   build:

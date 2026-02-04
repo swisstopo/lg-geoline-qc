@@ -20,6 +20,7 @@ from qgis.core import (
     QgsTask,
     QgsVectorLayer,
     QgsWkbTypes,
+    QgsVectorFileWriter,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
@@ -1358,8 +1359,67 @@ class GeolinesQCPlugin:
             if os.path.exists(style_path):
                 result_layer.loadNamedStyle(style_path)
 
-            # Add to map
-            QgsProject.instance().addMapLayer(result_layer)
+            # Save to GeoPackage in project directory
+            project = QgsProject.instance()
+            project_path = project.absolutePath()
+
+            if project_path:  # Project has been saved
+                gpkg_path = os.path.join(project_path, "QA_Analysis.gpkg")
+                layer_name = result_layer.name()  # Or use a custom name
+
+                # Options for saving
+                options = QgsVectorFileWriter.SaveVectorOptions()
+                options.driverName = "GPKG"
+                options.layerName = layer_name
+                # Tell GDAL to auto-generate FID, ignoring the source fid field
+                options.layerOptions = ["FID="]
+
+                # If GPKG exists, update/append; otherwise create
+                if os.path.exists(gpkg_path):
+                    options.actionOnExistingFile = (
+                        QgsVectorFileWriter.CreateOrOverwriteLayer
+                    )
+                else:
+                    options.actionOnExistingFile = (
+                        QgsVectorFileWriter.CreateOrOverwriteFile
+                    )
+
+                # Write the layer
+                error, error_message, new_filename, new_layer_name = (
+                    QgsVectorFileWriter.writeAsVectorFormatV3(
+                        result_layer, gpkg_path, project.transformContext(), options
+                    )
+                )
+
+                if error == QgsVectorFileWriter.NoError:
+                    # Load the saved layer from GPKG instead of memory layer
+                    uri = f"{gpkg_path}|layername={layer_name}"
+                    saved_layer = QgsVectorLayer(uri, layer_name, "ogr")
+
+                    if saved_layer.isValid():
+                        # Apply style to saved layer
+                        if os.path.exists(style_path):
+                            saved_layer.loadNamedStyle(style_path)
+                        project.addMapLayer(saved_layer)
+                    else:
+                        # Fallback: add memory layer
+                        project.addMapLayer(result_layer)
+                        self.iface.messageBar().pushWarning(
+                            "GeoLines QC",
+                            "Could not load saved layer, using memory layer",
+                        )
+                else:
+                    # Save failed, use memory layer
+                    project.addMapLayer(result_layer)
+                    self.iface.messageBar().pushWarning(
+                        "GeoLines QC", f"Could not save to GPKG: {error_message}"
+                    )
+            else:
+                # Project not saved, just add memory layer
+                project.addMapLayer(result_layer)
+                self.iface.messageBar().pushInfo(
+                    "GeoLines QC", "Project not saved - results in memory only"
+                )
 
             # Calculate statistics
             within_count = sum(1 for f in result_layer.getFeatures() if f["intersects"])
