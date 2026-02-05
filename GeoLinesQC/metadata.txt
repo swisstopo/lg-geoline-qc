@@ -8,8 +8,9 @@ author=Swiss Geological Survey
 email=geocover@swisstopo.ch
 icon=icons8-line-chart-50.png
 
-homepage=https://github.com/procrastinatio/lg-geolines-qc
-tracker=https://github.com/procrastinatio/lg-geolines-qc/issues
-repository=https://github.com/procrastinatio/lg-geolines-qc
+homepage=https://github.com/swisstopo/lg-geolines-qc
+tracker=https://github.com/swisstopo/lg-geolines-qc/issues
+repository=https://github.com/swisstopo/lg-geolines-qc
 about=QGis plugins to assess quality of digitalized geological boundaries
 tags=geocover, geology, tectonic, 3d
+
