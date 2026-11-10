@@ -37,6 +37,29 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
 )
 
+FID_FIELD = "fid"  # GeoPackage primary key; must not be copied as a plain attribute
+
+
+def fields_without_fid(fields):
+    """Return a list of QgsField without the GeoPackage 'fid' primary key.
+
+    Copying 'fid' as a normal attribute makes split segments share the same
+    value, which gets nulled on export to GPKG (primary keys must be unique).
+    """
+    return [f for f in fields if f.name().lower() != FID_FIELD]
+
+
+def copy_feature_without_fid(feat, layer_fields, geometry=None):
+    """Copy 'feat' into a new feature built on 'layer_fields' (matched by name)."""
+    new_feat = QgsFeature(layer_fields)
+    src_names = feat.fields().names()
+    for field in layer_fields:
+        if field.name() in src_names:
+            new_feat.setAttribute(field.name(), feat[field.name()])
+    new_feat.setGeometry(geometry if geometry is not None else feat.geometry())
+    return new_feat
+
+
 DEFAULT_BUFFER = 500.0
 DIALOG_WIDTH = 500
 CHUNK_SIZE = 100  # Process features in chunks for better feedback
@@ -371,10 +394,13 @@ class QCAnalysisTask(QgsTask):
         )
 
         # Copy field structure
-        within_layer.dataProvider().addAttributes(input_layer.fields())
+        # (without 'fid': split parts would otherwise share the same key)
+        within_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
         within_layer.updateFields()
-        outside_layer.dataProvider().addAttributes(input_layer.fields())
+        outside_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
         outside_layer.updateFields()
+        within_fields = within_layer.fields()
+        outside_fields = outside_layer.fields()
 
         # Collect features for batch insertion (much faster)
         within_features = []
@@ -396,7 +422,7 @@ class QCAnalysisTask(QgsTask):
 
             # Quick bbox check: if feature bbox doesn't intersect buffer bbox, it's definitely outside
             if not feat_bbox.intersects(buffer_bbox):
-                outside_features.append(feat)
+                outside_features.append(copy_feature_without_fid(feat, outside_fields))
             else:
                 # Need to check geometry intersection
                 features_to_check.append(feat)
@@ -441,18 +467,18 @@ class QCAnalysisTask(QgsTask):
 
                 # Add intersecting part (if not empty)
                 if intersection and not intersection.isEmpty():
-                    within_feat = QgsFeature(feat)
+                    within_feat = copy_feature_without_fid(feat, within_fields)
                     within_feat.setGeometry(intersection)
                     within_features.append(within_feat)
 
                 # Add non-intersecting part (if not empty)
                 if difference and not difference.isEmpty():
-                    outside_feat = QgsFeature(feat)
+                    outside_feat = copy_feature_without_fid(feat, outside_fields)
                     outside_feat.setGeometry(difference)
                     outside_features.append(outside_feat)
             else:
                 # Feature doesn't intersect buffer at all
-                outside_features.append(feat)
+                outside_features.append(copy_feature_without_fid(feat, outside_fields))
 
             processed += 1
 
@@ -573,10 +599,12 @@ class QCAnalysisTask(QgsTask):
         )
 
         # Copy fields
-        boundary_layer.dataProvider().addAttributes(input_layer.fields())
+        boundary_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
         boundary_layer.updateFields()
-        regular_layer.dataProvider().addAttributes(input_layer.fields())
+        regular_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
         regular_layer.updateFields()
+        boundary_fields = boundary_layer.fields()
+        regular_fields = regular_layer.fields()
 
         # Separate features based on boundary field value
         boundary_features = []
@@ -610,9 +638,9 @@ class QCAnalysisTask(QgsTask):
                     )
 
             if is_boundary:
-                boundary_features.append(feat)
+                boundary_features.append(copy_feature_without_fid(feat, boundary_fields))
             else:
-                regular_features.append(feat)
+                regular_features.append(copy_feature_without_fid(feat, regular_fields))
 
         # Add features to respective layers
         if boundary_features:
