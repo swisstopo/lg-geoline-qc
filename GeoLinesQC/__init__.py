@@ -26,7 +26,6 @@ def classFactory(iface):
     :param iface: A QGIS interface instance.
     :type iface: QgsInterface
     """
-    #
     from .geolines_qc_plugin import GeolinesQCPlugin
 
     return GeolinesQCPlugin(iface)

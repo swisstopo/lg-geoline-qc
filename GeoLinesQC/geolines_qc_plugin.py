@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 
 from qgis import processing
@@ -18,9 +16,9 @@ from qgis.core import (
     QgsRectangle,
     QgsSpatialIndex,
     QgsTask,
+    QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsVectorFileWriter,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
@@ -339,7 +337,7 @@ class QCAnalysisTask(QgsTask):
             import traceback
 
             self.exception = e
-            error_msg = f"Error in analysis: {str(e)}"
+            error_msg = f"Error in analysis: {e!s}"
             tb = traceback.format_exc()
             QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Critical)
             QgsMessageLog.logMessage(tb, "GeoLinesQC", Qgis.Critical)
@@ -1423,7 +1421,7 @@ class GeolinesQCPlugin:
                     )
 
                 # Write the layer
-                error, error_message, new_filename, new_layer_name = (
+                error, error_message, _new_filename, _new_layer_name = (
                     QgsVectorFileWriter.writeAsVectorFormatV3(
                         result_layer, gpkg_path, project.transformContext(), options
                     )
