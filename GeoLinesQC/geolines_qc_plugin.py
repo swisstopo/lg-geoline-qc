@@ -396,9 +396,13 @@ class QCAnalysisTask(QgsTask):
 
         # Copy field structure
         # (without 'fid': split parts would otherwise share the same key)
-        within_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        within_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         within_layer.updateFields()
-        outside_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        outside_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         outside_layer.updateFields()
         within_fields = within_layer.fields()
         outside_fields = outside_layer.fields()
@@ -600,9 +604,13 @@ class QCAnalysisTask(QgsTask):
         )
 
         # Copy fields
-        boundary_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        boundary_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         boundary_layer.updateFields()
-        regular_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        regular_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         regular_layer.updateFields()
         boundary_fields = boundary_layer.fields()
         regular_fields = regular_layer.fields()
@@ -639,7 +647,9 @@ class QCAnalysisTask(QgsTask):
                     )
 
             if is_boundary:
-                boundary_features.append(copy_feature_without_fid(feat, boundary_fields))
+                boundary_features.append(
+                    copy_feature_without_fid(feat, boundary_fields)
+                )
             else:
                 regular_features.append(copy_feature_without_fid(feat, regular_fields))
 
