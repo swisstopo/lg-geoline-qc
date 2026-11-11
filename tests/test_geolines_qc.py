@@ -45,7 +45,10 @@ def create_intersects_field():
     if qgis_version >= 34000:  # QGIS 3.40+
         try:
             from qgis.PyQt.QtCore import QMetaType
-            field = QgsField(name="intersects", type=QMetaType.Type.Bool, typeName="Bool")
+
+            field = QgsField(
+                name="intersects", type=QMetaType.Type.Bool, typeName="Bool"
+            )
             return field
         except (ImportError, AttributeError, TypeError):
             pass  # Fall through to legacy API

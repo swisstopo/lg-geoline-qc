@@ -283,6 +283,7 @@ If you get `QgsNotSupportedException: Processing plugin has not been loaded`:
 
 ```python
 from processing.core.Processing import Processing
+
 Processing.initialize()
 ```
 

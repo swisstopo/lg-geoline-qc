@@ -10,3 +10,10 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 
+
+
+[tool.ruff.lint]
+# QGIS requires the plugin folder to be named "GeoLinesQC" (N999).
+# The others are style rules enabled by newer default rule sets that this
+# code base does not follow (broad exception catch in QgsTask, plain Exception, manual counters).
+ignore = ["N999", "TRY002", "BLE001", "SIM113"]

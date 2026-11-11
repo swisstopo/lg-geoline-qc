@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 
 from qgis import processing
@@ -18,9 +16,9 @@ from qgis.core import (
     QgsRectangle,
     QgsSpatialIndex,
     QgsTask,
+    QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
-    QgsVectorFileWriter,
 )
 from qgis.PyQt.QtCore import QCoreApplication, Qt, QVariant, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
@@ -339,7 +337,7 @@ class QCAnalysisTask(QgsTask):
             import traceback
 
             self.exception = e
-            error_msg = f"Error in analysis: {str(e)}"
+            error_msg = f"Error in analysis: {e!s}"
             tb = traceback.format_exc()
             QgsMessageLog.logMessage(error_msg, "GeoLinesQC", Qgis.Critical)
             QgsMessageLog.logMessage(tb, "GeoLinesQC", Qgis.Critical)
@@ -396,9 +394,13 @@ class QCAnalysisTask(QgsTask):
 
         # Copy field structure
         # (without 'fid': split parts would otherwise share the same key)
-        within_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        within_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         within_layer.updateFields()
-        outside_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        outside_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         outside_layer.updateFields()
         within_fields = within_layer.fields()
         outside_fields = outside_layer.fields()
@@ -600,9 +602,13 @@ class QCAnalysisTask(QgsTask):
         )
 
         # Copy fields
-        boundary_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        boundary_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         boundary_layer.updateFields()
-        regular_layer.dataProvider().addAttributes(fields_without_fid(input_layer.fields()))
+        regular_layer.dataProvider().addAttributes(
+            fields_without_fid(input_layer.fields())
+        )
         regular_layer.updateFields()
         boundary_fields = boundary_layer.fields()
         regular_fields = regular_layer.fields()
@@ -639,7 +645,9 @@ class QCAnalysisTask(QgsTask):
                     )
 
             if is_boundary:
-                boundary_features.append(copy_feature_without_fid(feat, boundary_fields))
+                boundary_features.append(
+                    copy_feature_without_fid(feat, boundary_fields)
+                )
             else:
                 regular_features.append(copy_feature_without_fid(feat, regular_fields))
 
@@ -1413,7 +1421,7 @@ class GeolinesQCPlugin:
                     )
 
                 # Write the layer
-                error, error_message, new_filename, new_layer_name = (
+                error, error_message, _new_filename, _new_layer_name = (
                     QgsVectorFileWriter.writeAsVectorFormatV3(
                         result_layer, gpkg_path, project.transformContext(), options
                     )
